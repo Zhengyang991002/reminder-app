@@ -15,7 +15,7 @@ A small learning project inspired by Apple Reminders. It has a Spring Boot REST 
 
 - Java 21, Spring Boot, Maven
 - Spring Web, Spring Data JPA, Bean Validation
-- H2 file database for local development
+- PostgreSQL for local development; H2 in-memory database for backend tests
 - Vue 3 Composition API, Vite, and browser `fetch()`
 
 ## Project structure
@@ -29,14 +29,14 @@ reminder-app/
 
 ## Run the backend
 
-Prerequisites: Java 21 and Maven.
+Prerequisites: Java 21, Maven, and a local PostgreSQL server with a `reminder_app` database.
 
 ```bash
 cd backend
 mvn spring-boot:run
 ```
 
-The API starts at `http://localhost:8080`. The current development database is H2 and is stored locally under `backend/data/` when the backend is started from the `backend` directory.
+The API starts at `http://localhost:8080`. The development configuration connects to PostgreSQL at `localhost:5432` using the `reminder_app` database and the local `zhangzhengyang` user. Backend integration tests use a separate in-memory H2 database instead.
 
 To run the backend tests:
 
