@@ -1,5 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import ReminderForm from './components/ReminderForm.vue'
+import ReminderList from './components/ReminderList.vue'
 
 const heading = 'Reminders'
 const minimumDueDate = getTodayDate()
@@ -247,34 +249,17 @@ async function saveReminder(reminder) {
   <main class="app-shell">
     <h1>{{ heading }}</h1>
 
-    <form class="reminder-form" @submit.prevent="createReminder">
-      <label>
-        <span>Title</span>
-        <input
-          v-model.trim="form.title"
-          type="text"
-          maxlength="255"
-          required
-          placeholder="What needs to be done?"
-        />
-      </label>
-
-      <label>
-        <span>Due date <small>(optional)</small></span>
-        <input
-          v-model="form.dueDate"
-          type="date"
-          :min="minimumDueDate"
-          :max="maximumDueDate"
-          @change="validateCreateDueDate"
-          @invalid="validateCreateDueDate"
-        />
-      </label>
-
-      <button type="submit" :disabled="submitting">
-        {{ submitting ? 'Adding...' : 'Add reminder' }}
-      </button>
-    </form>
+    <ReminderForm
+      :title="form.title"
+      :due-date="form.dueDate"
+      :submitting="submitting"
+      :minimum-due-date="minimumDueDate"
+      :maximum-due-date="maximumDueDate"
+      @update:title="form.title = $event"
+      @update:due-date="form.dueDate = $event"
+      @submit="createReminder"
+      @validate-due-date="validateCreateDueDate"
+    />
 
     <p v-if="submissionError" class="error" role="alert">{{ submissionError }}</p>
     <p v-if="completionError" class="error" role="alert">{{ completionError }}</p>
@@ -285,73 +270,25 @@ async function saveReminder(reminder) {
     <p v-else-if="error" class="error" role="alert">{{ error }}</p>
     <p v-else-if="reminders.length === 0">No reminders yet.</p>
 
-    <ul v-else class="reminder-list">
-      <li v-for="reminder in reminders" :key="reminder.id" class="reminder-item">
-        <form
-          v-if="editingReminderId === reminder.id"
-          class="reminder-form edit-form"
-          @submit.prevent="saveReminder(reminder)"
-        >
-          <label>
-            <span>Title</span>
-            <input v-model.trim="editForm.title" type="text" maxlength="255" required />
-          </label>
-
-          <label>
-            <span>Due date <small>(optional)</small></span>
-            <input
-              v-model="editForm.dueDate"
-              type="date"
-              :min="minimumDueDate"
-              :max="maximumDueDate"
-              @change="validateEditDueDate"
-              @invalid="validateEditDueDate"
-            />
-          </label>
-
-          <div class="edit-actions">
-            <button type="submit" :disabled="savingReminderIds.has(reminder.id)">
-              {{ savingReminderIds.has(reminder.id) ? 'Saving...' : 'Save' }}
-            </button>
-            <button
-              type="button"
-              class="cancel-button"
-              :disabled="savingReminderIds.has(reminder.id)"
-              @click="cancelEditing"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-
-        <template v-else>
-          <label class="reminder-title">
-            <input
-              type="checkbox"
-              :checked="reminder.completed"
-              :disabled="updatingReminderIds.has(reminder.id)"
-              @change="updateCompletion(reminder, $event)"
-            />
-            <span :class="{ completed: reminder.completed }">{{ reminder.title }}</span>
-          </label>
-          <div class="reminder-actions">
-            <time v-if="reminder.dueDate" :datetime="reminder.dueDate">
-              {{ reminder.dueDate }}
-            </time>
-            <button type="button" class="edit-button" @click="startEditing(reminder)">
-              Edit
-            </button>
-            <button
-              type="button"
-              class="delete-button"
-              :disabled="deletingReminderIds.has(reminder.id)"
-              @click="deleteReminder(reminder)"
-            >
-              {{ deletingReminderIds.has(reminder.id) ? 'Deleting...' : 'Delete' }}
-            </button>
-          </div>
-        </template>
-      </li>
-    </ul>
+    <ReminderList
+      v-else
+      :reminders="reminders"
+      :editing-reminder-id="editingReminderId"
+      :updating-reminder-ids="updatingReminderIds"
+      :deleting-reminder-ids="deletingReminderIds"
+      :saving-reminder-ids="savingReminderIds"
+      :edit-title="editForm.title"
+      :edit-due-date="editForm.dueDate"
+      :minimum-due-date="minimumDueDate"
+      :maximum-due-date="maximumDueDate"
+      @completion-change="updateCompletion"
+      @start-edit="startEditing"
+      @cancel-edit="cancelEditing"
+      @save-edit="saveReminder"
+      @delete-reminder="deleteReminder"
+      @update:edit-title="editForm.title = $event"
+      @update:edit-due-date="editForm.dueDate = $event"
+      @validate-edit-due-date="validateEditDueDate"
+    />
   </main>
 </template>
