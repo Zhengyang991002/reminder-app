@@ -8,6 +8,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDate;
+
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -37,12 +39,13 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void createsAndListsReminders() throws Exception {
+        String dueDate = LocalDate.now().plusDays(1).toString();
         String request = """
                 {
                   "title": "  Buy groceries  ",
-                  "dueDate": "2026-09-15"
+                  "dueDate": "%s"
                 }
-                """;
+                """.formatted(dueDate);
 
         mockMvc.perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -52,7 +55,7 @@ class ReminderControllerIntegrationTest {
                 .andExpect(jsonPath("$.title").value("Buy groceries"))
                 .andExpect(jsonPath("$.completed").value(false))
                 .andExpect(jsonPath("$.createdAt").isNotEmpty())
-                .andExpect(jsonPath("$.dueDate").value("2026-09-15"));
+                .andExpect(jsonPath("$.dueDate").value(dueDate));
 
         mockMvc.perform(get("/api/reminders"))
                 .andExpect(status().isOk())
@@ -63,12 +66,13 @@ class ReminderControllerIntegrationTest {
     @Test
     void updatesAReminder() throws Exception {
         Reminder reminder = reminderRepository.save(new Reminder("Original title", null));
+        String dueDate = LocalDate.now().plusDays(2).toString();
         String request = """
                 {
                   "title": "Updated title",
-                  "dueDate": "2026-10-01"
+                  "dueDate": "%s"
                 }
-                """;
+                """.formatted(dueDate);
 
         mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -76,8 +80,95 @@ class ReminderControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(reminder.getId()))
                 .andExpect(jsonPath("$.title").value("Updated title"))
-                .andExpect(jsonPath("$.dueDate").value("2026-10-01"))
+                .andExpect(jsonPath("$.dueDate").value(dueDate))
                 .andExpect(jsonPath("$.completed").value(false));
+    }
+
+    @Test
+    void createsReminderWithTodayDueDate() throws Exception {
+        String today = LocalDate.now().toString();
+        String request = """
+                {
+                  "title": "Due today",
+                  "dueDate": "%s"
+                }
+                """.formatted(today);
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.dueDate").value(today));
+    }
+
+    @Test
+    void rejectsPastDueDateWhenCreating() throws Exception {
+        String request = """
+                {
+                  "title": "Past reminder",
+                  "dueDate": "%s"
+                }
+                """.formatted(LocalDate.now().minusDays(1));
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.dueDate").value("Due date must be today or later"));
+    }
+
+    @Test
+    void rejectsPastDueDateWhenUpdating() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null));
+        String request = """
+                {
+                  "title": "Updated title",
+                  "dueDate": "%s"
+                }
+                """.formatted(LocalDate.now().minusDays(1));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.dueDate").value("Due date must be today or later"));
+    }
+
+    @Test
+    void rejectsUnsupportedDueDateYearWhenCreating() throws Exception {
+        String request = """
+                {
+                  "title": "Far future reminder",
+                  "dueDate": "+10000-01-01"
+                }
+                """;
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.dueDate").value("Due date year must be between 1000 and 9999"));
+    }
+
+    @Test
+    void rejectsUnsupportedDueDateYearWhenUpdating() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null));
+        String request = """
+                {
+                  "title": "Updated title",
+                  "dueDate": "+10000-01-01"
+                }
+                """;
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.dueDate").value("Due date year must be between 1000 and 9999"));
     }
 
     @Test
