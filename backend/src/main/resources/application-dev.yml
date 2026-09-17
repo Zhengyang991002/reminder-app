@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/reminder_app
+    username: zhangzhengyang
+  jpa:
+    hibernate:
+      ddl-auto: update

@@ -1,10 +1,7 @@
 spring:
   application:
     name: reminder-api
-  datasource:
-    url: jdbc:postgresql://localhost:5432/reminder_app
-    username: zhangzhengyang
+  profiles:
+    default: dev
   jpa:
-    hibernate:
-      ddl-auto: update
     open-in-view: false
