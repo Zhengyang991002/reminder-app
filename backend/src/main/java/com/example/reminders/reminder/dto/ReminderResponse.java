@@ -8,6 +8,7 @@ public record ReminderResponse(
         String title,
         boolean completed,
         Instant createdAt,
-        LocalDate dueDate
+        LocalDate dueDate,
+        Long listId
 ) {
 }

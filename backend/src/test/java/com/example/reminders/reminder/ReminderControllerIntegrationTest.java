@@ -63,12 +63,14 @@ class ReminderControllerIntegrationTest {
                 .andExpect(jsonPath("$.title").value("Buy groceries"))
                 .andExpect(jsonPath("$.completed").value(false))
                 .andExpect(jsonPath("$.createdAt").isNotEmpty())
-                .andExpect(jsonPath("$.dueDate").value(dueDate));
+                .andExpect(jsonPath("$.dueDate").value(dueDate))
+                .andExpect(jsonPath("$.listId").value(defaultReminderList.getId()));
 
         mockMvc.perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)))
-                .andExpect(jsonPath("$[0].title").value("Buy groceries"));
+                .andExpect(jsonPath("$[0].title").value("Buy groceries"))
+                .andExpect(jsonPath("$[0].listId").value(defaultReminderList.getId()));
 
         Reminder createdReminder = reminderRepository.findAll().get(0);
         assertThat(createdReminder.getList().getId()).isEqualTo(defaultReminderList.getId());
@@ -213,7 +215,8 @@ class ReminderControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.title").value("Study"));
+                .andExpect(jsonPath("$.title").value("Study"))
+                .andExpect(jsonPath("$.listId").value(reminderList.getId()));
 
         Reminder createdReminder = reminderRepository.findAll().get(0);
         assertThat(createdReminder.getList().getId()).isEqualTo(reminderList.getId());

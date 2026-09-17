@@ -86,7 +86,8 @@ public class ReminderService {
                 reminder.getTitle(),
                 reminder.isCompleted(),
                 reminder.getCreatedAt(),
-                reminder.getDueDate()
+                reminder.getDueDate(),
+                reminder.getList().getId()
         );
     }
 }
