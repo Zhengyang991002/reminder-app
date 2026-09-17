@@ -11,6 +11,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDate;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -31,9 +33,16 @@ class ReminderControllerIntegrationTest {
     @Autowired
     private ReminderRepository reminderRepository;
 
+    @Autowired
+    private ReminderListRepository reminderListRepository;
+
+    private ReminderList defaultReminderList;
+
     @BeforeEach
     void clearReminders() {
         reminderRepository.deleteAll();
+        reminderListRepository.deleteAll();
+        defaultReminderList = reminderListRepository.save(new ReminderList("Reminders"));
     }
 
     @Test
@@ -60,11 +69,170 @@ class ReminderControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].title").value("Buy groceries"));
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getList().getId()).isEqualTo(defaultReminderList.getId());
+    }
+
+    @Test
+    void listsReminderLists() throws Exception {
+        reminderListRepository.save(new ReminderList("School"));
+
+        mockMvc.perform(get("/api/lists"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[*].name", hasItems("Reminders", "School")));
+    }
+
+    @Test
+    void createsAReminderList() throws Exception {
+        mockMvc.perform(post("/api/lists")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"  School  \"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").isNumber())
+                .andExpect(jsonPath("$.name").value("School"))
+                .andExpect(jsonPath("$.createdAt").isNotEmpty());
+    }
+
+    @Test
+    void allowsDuplicateReminderListNames() throws Exception {
+        String request = "{\"name\":\"School\"}";
+
+        mockMvc.perform(post("/api/lists")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/lists")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isCreated());
+
+        assertThat(reminderListRepository.findAll())
+                .extracting(ReminderList::getName)
+                .containsExactlyInAnyOrder("Reminders", "School", "School");
+    }
+
+    @Test
+    void rejectsBlankReminderListName() throws Exception {
+        mockMvc.perform(post("/api/lists")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"   \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.name").value("Name must not be blank"));
+    }
+
+    @Test
+    void rejectsReminderListNameLongerThan100Characters() throws Exception {
+        String name = "a".repeat(101);
+
+        mockMvc.perform(post("/api/lists")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + name + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.name").value("Name must be at most 100 characters"));
+    }
+
+    @Test
+    void renamesAReminderList() throws Exception {
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+
+        mockMvc.perform(put("/api/lists/{id}", reminderList.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"  CS5010  \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(reminderList.getId()))
+                .andExpect(jsonPath("$.name").value("CS5010"));
+
+        assertThat(reminderListRepository.findById(reminderList.getId()).orElseThrow().getName())
+                .isEqualTo("CS5010");
+    }
+
+    @Test
+    void returnsNotFoundWhenRenamingAMissingReminderList() throws Exception {
+        mockMvc.perform(put("/api/lists/{id}", 9999)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"CS5010\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Reminder list with id 9999 was not found"));
+    }
+
+    @Test
+    void deletesANormalReminderList() throws Exception {
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+
+        mockMvc.perform(delete("/api/lists/{id}", reminderList.getId()))
+                .andExpect(status().isNoContent());
+
+        assertThat(reminderListRepository.existsById(reminderList.getId())).isFalse();
+    }
+
+    @Test
+    void movesRemindersToTheDefaultListBeforeDeletingAReminderList() throws Exception {
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+        Reminder reminder = reminderRepository.save(new Reminder("Study", null, reminderList));
+
+        mockMvc.perform(delete("/api/lists/{id}", reminderList.getId()))
+                .andExpect(status().isNoContent());
+
+        Reminder movedReminder = reminderRepository.findById(reminder.getId()).orElseThrow();
+        assertThat(movedReminder.getList().getId()).isEqualTo(defaultReminderList.getId());
+        assertThat(reminderListRepository.existsById(reminderList.getId())).isFalse();
+    }
+
+    @Test
+    void rejectsDeletingTheDefaultReminderList() throws Exception {
+        mockMvc.perform(delete("/api/lists/{id}", defaultReminderList.getId()))
+                .andExpect(status().isBadRequest());
+
+        assertThat(reminderListRepository.existsById(defaultReminderList.getId())).isTrue();
+    }
+
+    @Test
+    void returnsNotFoundWhenDeletingAMissingReminderList() throws Exception {
+        mockMvc.perform(delete("/api/lists/{id}", 9999))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Reminder list with id 9999 was not found"));
+    }
+
+    @Test
+    void createsAReminderInTheSpecifiedList() throws Exception {
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+        String request = """
+                {
+                  "title": "Study",
+                  "dueDate": null,
+                  "listId": %d
+                }
+                """.formatted(reminderList.getId());
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.title").value("Study"));
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getList().getId()).isEqualTo(reminderList.getId());
+    }
+
+    @Test
+    void returnsNotFoundWhenCreatingAReminderWithAMissingList() throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Study\",\"dueDate\":null,\"listId\":9999}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Reminder list with id 9999 was not found"));
+
+        assertThat(reminderRepository.count()).isZero();
     }
 
     @Test
     void updatesAReminder() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Original title", null));
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, defaultReminderList));
         String dueDate = LocalDate.now().plusDays(2).toString();
         String request = """
                 {
@@ -119,7 +287,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsPastDueDateWhenUpdating() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Original title", null));
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, defaultReminderList));
         String request = """
                 {
                   "title": "Updated title",
@@ -154,7 +322,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsUnsupportedDueDateYearWhenUpdating() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Original title", null));
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, defaultReminderList));
         String request = """
                 {
                   "title": "Updated title",
@@ -172,7 +340,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void marksAReminderAsCompleted() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Finish report", null));
+        Reminder reminder = reminderRepository.save(new Reminder("Finish report", null, defaultReminderList));
 
         mockMvc.perform(patch("/api/reminders/{id}/completion", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -183,7 +351,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void deletesAReminder() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Remove me", null));
+        Reminder reminder = reminderRepository.save(new Reminder("Remove me", null, defaultReminderList));
 
         mockMvc.perform(delete("/api/reminders/{id}", reminder.getId()))
                 .andExpect(status().isNoContent());

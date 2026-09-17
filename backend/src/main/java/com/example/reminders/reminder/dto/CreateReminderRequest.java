@@ -13,6 +13,7 @@ public record CreateReminderRequest(
         String title,
         @FutureOrPresent(message = "Due date must be today or later")
         @SupportedDueDateYear
-        LocalDate dueDate
+        LocalDate dueDate,
+        Long listId
 ) {
 }

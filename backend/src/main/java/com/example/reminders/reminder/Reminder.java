@@ -5,6 +5,8 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
@@ -29,15 +31,21 @@ public class Reminder {
     private Instant createdAt;
 
     private LocalDate dueDate;
+
+    @ManyToOne(optional = false)
+    @JoinColumn(name = "list_id", nullable = false)
+    private ReminderList list;
+
     // So no args construction is limited
     protected Reminder() {
     }
 
-    public Reminder(String title, LocalDate dueDate) {
+    public Reminder(String title, LocalDate dueDate, ReminderList list) {
         this.title = title;
         this.completed = false;
         this.createdAt = Instant.now();
         this.dueDate = dueDate;
+        this.list = list;
     }
 
     public Long getId() {
@@ -58,6 +66,14 @@ public class Reminder {
 
     public LocalDate getDueDate() {
         return dueDate;
+    }
+
+    public ReminderList getList() {
+        return list;
+    }
+
+    public void moveTo(ReminderList list) {
+        this.list = list;
     }
 
     public void update(String title, LocalDate dueDate) {

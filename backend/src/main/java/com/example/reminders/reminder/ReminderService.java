@@ -15,10 +15,17 @@ import java.util.List;
 @Transactional(readOnly = true)
 public class ReminderService {
 
-    private final ReminderRepository reminderRepository;
+    private static final String DEFAULT_REMINDER_LIST_NAME = "Reminders";
 
-    public ReminderService(ReminderRepository reminderRepository) {
+    private final ReminderRepository reminderRepository;
+    private final ReminderListRepository reminderListRepository;
+
+    public ReminderService(
+            ReminderRepository reminderRepository,
+            ReminderListRepository reminderListRepository
+    ) {
         this.reminderRepository = reminderRepository;
+        this.reminderListRepository = reminderListRepository;
     }
 
     public List<ReminderResponse> findAll() {
@@ -30,8 +37,23 @@ public class ReminderService {
 
     @Transactional
     public ReminderResponse create(CreateReminderRequest request) {
-        Reminder reminder = new Reminder(request.title().trim(), request.dueDate());
+        ReminderList reminderList = request.listId() == null
+                ? getDefaultReminderList()
+                : getReminderList(request.listId());
+        Reminder reminder = new Reminder(request.title().trim(), request.dueDate(), reminderList);
         return toResponse(reminderRepository.save(reminder));
+    }
+
+    private ReminderList getDefaultReminderList() {
+        return reminderListRepository.findFirstByNameOrderByIdAsc(DEFAULT_REMINDER_LIST_NAME)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Reminder list named " + DEFAULT_REMINDER_LIST_NAME + " was not found"
+                ));
+    }
+
+    private ReminderList getReminderList(Long id) {
+        return reminderListRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Reminder list with id " + id + " was not found"));
     }
 
     @Transactional
