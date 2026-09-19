@@ -105,6 +105,10 @@ function getTodayDate() {
   return `${today.getFullYear()}-${month}-${day}`
 }
 
+function toTimeInputValue(dueTime) {
+  return dueTime ? dueTime.slice(0, 5) : ''
+}
+
 function validateDueDate(dueDate) {
   if (!dueDate) {
     return ''
@@ -129,14 +133,28 @@ function validateDueDate(dueDate) {
   return ''
 }
 
-function validateCreateDueDate(event) {
-  const validationError = validateDueDate(event.target.value)
-  submissionError.value = validationError || (event.target.validity.valid ? '' : 'Enter a valid due date.')
+function validateDueSchedule(dueDate, dueTime) {
+  const dueDateError = validateDueDate(dueDate)
+
+  if (dueDateError) {
+    return dueDateError
+  }
+
+  if (dueTime && !dueDate) {
+    return 'A due date is required when a due time is set.'
+  }
+
+  return ''
 }
 
-function validateEditDueDate(event) {
-  const validationError = validateDueDate(event.target.value)
-  editError.value = validationError || (event.target.validity.valid ? '' : 'Enter a valid due date.')
+function validateCreateDueSchedule(event) {
+  const validationError = validateDueSchedule(form.dueDate, form.dueTime)
+  submissionError.value = validationError || (event.target.validity.valid ? '' : 'Enter a valid due date or time.')
+}
+
+function validateEditDueSchedule(event) {
+  const validationError = validateDueSchedule(editForm.dueDate, editForm.dueTime)
+  editError.value = validationError || (event.target.validity.valid ? '' : 'Enter a valid due date or time.')
 }
 
 function validateListName(name) {
@@ -319,7 +337,8 @@ async function deleteList(listId) {
   }
 
   listError.value = ''
-  const deletedSelectedList = selectedListId.value === listId
+  const deletedSelectedList =
+    selectedView.value.type === 'list' && selectedView.value.id === listId
   deletingListIds.add(listId)
 
   try {
@@ -334,7 +353,7 @@ async function deleteList(listId) {
     await Promise.all([loadLists(), loadReminders()])
 
     if (deletedSelectedList) {
-      selectedListId.value = null
+      selectedView.value = { type: 'list', id: null }
       editingReminderId.value = null
       selectDefaultList()
     }
@@ -347,10 +366,13 @@ async function deleteList(listId) {
 
 async function createReminder() {
   submissionError.value = ''
-  const dueDateError = validateDueDate(form.dueDate)
+  const dueScheduleError = validateDueSchedule(form.dueDate, form.dueTime)
+  const listId = selectedView.value.type === 'list'
+    ? selectedView.value.id
+    : defaultListId.value
 
-  if (dueDateError) {
-    submissionError.value = dueDateError
+  if (dueScheduleError) {
+    submissionError.value = dueScheduleError
     return
   }
 
@@ -365,7 +387,8 @@ async function createReminder() {
       body: JSON.stringify({
         title: form.title,
         dueDate: form.dueDate || null,
-        listId: selectedListId.value
+        dueTime: form.dueTime || null,
+        listId
       })
     })
 
@@ -377,6 +400,7 @@ async function createReminder() {
     reminders.value = [reminder, ...reminders.value]
     form.title = ''
     form.dueDate = ''
+    form.dueTime = ''
   } catch {
     submissionError.value = 'Unable to create reminder.'
   } finally {
@@ -449,6 +473,7 @@ function startEditing(reminder) {
   editingReminderId.value = reminder.id
   editForm.title = reminder.title
   editForm.dueDate = reminder.dueDate || ''
+  editForm.dueTime = toTimeInputValue(reminder.dueTime)
   editError.value = ''
 }
 
@@ -463,10 +488,10 @@ async function saveReminder(reminder) {
   }
 
   editError.value = ''
-  const dueDateError = validateDueDate(editForm.dueDate)
+  const dueScheduleError = validateDueSchedule(editForm.dueDate, editForm.dueTime)
 
-  if (dueDateError) {
-    editError.value = dueDateError
+  if (dueScheduleError) {
+    editError.value = dueScheduleError
     return
   }
 
@@ -480,7 +505,8 @@ async function saveReminder(reminder) {
       },
       body: JSON.stringify({
         title: editForm.title,
-        dueDate: editForm.dueDate || null
+        dueDate: editForm.dueDate || null,
+        dueTime: editForm.dueTime || null
       })
     })
 
@@ -540,13 +566,15 @@ async function saveReminder(reminder) {
       <ReminderForm
         :title="form.title"
         :due-date="form.dueDate"
+        :due-time="form.dueTime"
         :submitting="submitting"
         :minimum-due-date="minimumDueDate"
         :maximum-due-date="maximumDueDate"
         @update:title="form.title = $event"
         @update:due-date="form.dueDate = $event"
+        @update:due-time="form.dueTime = $event"
         @submit="createReminder"
-        @validate-due-date="validateCreateDueDate"
+        @validate-due-schedule="validateCreateDueSchedule"
       />
 
       <p v-if="submissionError" class="error" role="alert">{{ submissionError }}</p>
@@ -567,6 +595,7 @@ async function saveReminder(reminder) {
         :saving-reminder-ids="savingReminderIds"
         :edit-title="editForm.title"
         :edit-due-date="editForm.dueDate"
+        :edit-due-time="editForm.dueTime"
         :minimum-due-date="minimumDueDate"
         :maximum-due-date="maximumDueDate"
         @completion-change="updateCompletion"
@@ -576,7 +605,8 @@ async function saveReminder(reminder) {
         @delete-reminder="deleteReminder"
         @update:edit-title="editForm.title = $event"
         @update:edit-due-date="editForm.dueDate = $event"
-        @validate-edit-due-date="validateEditDueDate"
+        @update:edit-due-time="editForm.dueTime = $event"
+        @validate-edit-due-schedule="validateEditDueSchedule"
       />
     </section>
   </main>

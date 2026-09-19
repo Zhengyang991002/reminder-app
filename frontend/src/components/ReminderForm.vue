@@ -8,6 +8,10 @@ defineProps({
     type: String,
     required: true
   },
+  dueTime: {
+    type: String,
+    required: true
+  },
   submitting: {
     type: Boolean,
     required: true
@@ -22,7 +26,13 @@ defineProps({
   }
 })
 
-const emit = defineEmits(['update:title', 'update:due-date', 'submit', 'validate-due-date'])
+const emit = defineEmits([
+  'update:title',
+  'update:due-date',
+  'update:due-time',
+  'submit',
+  'validate-due-schedule'
+])
 
 function updateTitle(event) {
   emit('update:title', event.target.value.trim())
@@ -32,8 +42,12 @@ function updateDueDate(event) {
   emit('update:due-date', event.target.value)
 }
 
-function validateDueDate(event) {
-  emit('validate-due-date', event)
+function updateDueTime(event) {
+  emit('update:due-time', event.target.value)
+}
+
+function validateDueSchedule(event) {
+  emit('validate-due-schedule', event)
 }
 
 function submitForm() {
@@ -63,8 +77,20 @@ function submitForm() {
         :min="minimumDueDate"
         :max="maximumDueDate"
         @input="updateDueDate"
-        @change="validateDueDate"
-        @invalid="validateDueDate"
+        @change="validateDueSchedule"
+        @invalid="validateDueSchedule"
+      />
+    </label>
+
+    <label>
+      <span>Due time <small>(optional)</small></span>
+      <input
+        :value="dueTime"
+        type="time"
+        step="60"
+        @input="updateDueTime"
+        @change="validateDueSchedule"
+        @invalid="validateDueSchedule"
       />
     </label>
 

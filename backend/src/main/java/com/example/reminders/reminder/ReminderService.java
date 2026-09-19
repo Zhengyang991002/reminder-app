@@ -40,7 +40,12 @@ public class ReminderService {
         ReminderList reminderList = request.listId() == null
                 ? getDefaultReminderList()
                 : getReminderList(request.listId());
-        Reminder reminder = new Reminder(request.title().trim(), request.dueDate(), reminderList);
+        Reminder reminder = new Reminder(
+                request.title().trim(),
+                request.dueDate(),
+                request.dueTime(),
+                reminderList
+        );
         return toResponse(reminderRepository.save(reminder));
     }
 
@@ -59,7 +64,7 @@ public class ReminderService {
     @Transactional
     public ReminderResponse update(Long id, UpdateReminderRequest request) {
         Reminder reminder = getReminder(id);
-        reminder.update(request.title().trim(), request.dueDate());
+        reminder.update(request.title().trim(), request.dueDate(), request.dueTime());
         return toResponse(reminder);
     }
 
@@ -87,6 +92,7 @@ public class ReminderService {
                 reminder.isCompleted(),
                 reminder.getCreatedAt(),
                 reminder.getDueDate(),
+                reminder.getDueTime(),
                 reminder.getList().getId()
         );
     }

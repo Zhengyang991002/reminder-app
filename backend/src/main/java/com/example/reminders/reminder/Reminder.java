@@ -11,6 +11,7 @@ import jakarta.persistence.Table;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 @Entity
 @Table(name = "reminders")
@@ -32,6 +33,9 @@ public class Reminder {
 
     private LocalDate dueDate;
 
+    @Column(name = "due_time")
+    private LocalTime dueTime;
+
     @ManyToOne(optional = false)
     @JoinColumn(name = "list_id", nullable = false)
     private ReminderList list;
@@ -40,11 +44,13 @@ public class Reminder {
     protected Reminder() {
     }
 
-    public Reminder(String title, LocalDate dueDate, ReminderList list) {
+    public Reminder(String title, LocalDate dueDate, LocalTime dueTime, ReminderList list) {
+        validateDueSchedule(dueDate, dueTime);
         this.title = title;
         this.completed = false;
         this.createdAt = Instant.now();
         this.dueDate = dueDate;
+        this.dueTime = dueTime;
         this.list = list;
     }
 
@@ -68,6 +74,10 @@ public class Reminder {
         return dueDate;
     }
 
+    public LocalTime getDueTime() {
+        return dueTime;
+    }
+
     public ReminderList getList() {
         return list;
     }
@@ -76,12 +86,20 @@ public class Reminder {
         this.list = list;
     }
 
-    public void update(String title, LocalDate dueDate) {
+    public void update(String title, LocalDate dueDate, LocalTime dueTime) {
+        validateDueSchedule(dueDate, dueTime);
         this.title = title;
         this.dueDate = dueDate;
+        this.dueTime = dueTime;
     }
 
     public void setCompleted(boolean completed) {
         this.completed = completed;
+    }
+
+    private void validateDueSchedule(LocalDate dueDate, LocalTime dueTime) {
+        if (dueTime != null && dueDate == null) {
+            throw new IllegalArgumentException("Due time requires a due date");
+        }
     }
 }

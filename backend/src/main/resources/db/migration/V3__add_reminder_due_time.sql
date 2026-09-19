@@ -1,0 +1,2 @@
+ALTER TABLE reminders
+    ADD COLUMN due_time TIME(6) WITHOUT TIME ZONE;

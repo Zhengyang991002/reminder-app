@@ -10,6 +10,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItems;
@@ -64,6 +65,7 @@ class ReminderControllerIntegrationTest {
                 .andExpect(jsonPath("$.completed").value(false))
                 .andExpect(jsonPath("$.createdAt").isNotEmpty())
                 .andExpect(jsonPath("$.dueDate").value(dueDate))
+                .andExpect(jsonPath("$.dueTime").isEmpty())
                 .andExpect(jsonPath("$.listId").value(defaultReminderList.getId()));
 
         mockMvc.perform(get("/api/reminders"))
@@ -74,6 +76,52 @@ class ReminderControllerIntegrationTest {
 
         Reminder createdReminder = reminderRepository.findAll().get(0);
         assertThat(createdReminder.getList().getId()).isEqualTo(defaultReminderList.getId());
+    }
+
+    @Test
+    void createsReminderWithoutDueDateOrDueTime() throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"No schedule\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.dueDate").isEmpty())
+                .andExpect(jsonPath("$.dueTime").isEmpty());
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getDueDate()).isNull();
+        assertThat(createdReminder.getDueTime()).isNull();
+    }
+
+    @Test
+    void createsReminderWithDueDateAndDueTime() throws Exception {
+        String dueDate = LocalDate.now().plusDays(1).toString();
+        String request = """
+                {
+                  "title": "Call dentist",
+                  "dueDate": "%s",
+                  "dueTime": "14:30"
+                }
+                """.formatted(dueDate);
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.dueDate").value(dueDate))
+                .andExpect(jsonPath("$.dueTime").value("14:30"));
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getDueTime()).isEqualTo(LocalTime.of(14, 30));
+    }
+
+    @Test
+    void rejectsDueTimeWithoutDueDateWhenCreating() throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Call dentist\",\"dueDate\":null,\"dueTime\":\"14:30\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.dueTime").value("Due time requires a due date"));
     }
 
     @Test
@@ -175,7 +223,7 @@ class ReminderControllerIntegrationTest {
     @Test
     void movesRemindersToTheDefaultListBeforeDeletingAReminderList() throws Exception {
         ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
-        Reminder reminder = reminderRepository.save(new Reminder("Study", null, reminderList));
+        Reminder reminder = reminderRepository.save(new Reminder("Study", null, null, reminderList));
 
         mockMvc.perform(delete("/api/lists/{id}", reminderList.getId()))
                 .andExpect(status().isNoContent());
@@ -235,7 +283,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void updatesAReminder() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, defaultReminderList));
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, null, defaultReminderList));
         String dueDate = LocalDate.now().plusDays(2).toString();
         String request = """
                 {
@@ -252,6 +300,51 @@ class ReminderControllerIntegrationTest {
                 .andExpect(jsonPath("$.title").value("Updated title"))
                 .andExpect(jsonPath("$.dueDate").value(dueDate))
                 .andExpect(jsonPath("$.completed").value(false));
+    }
+
+    @Test
+    void updatesAReminderDueTime() throws Exception {
+        String dueDate = LocalDate.now().plusDays(2).toString();
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title",
+                LocalDate.parse(dueDate),
+                null,
+                defaultReminderList
+        ));
+        String request = """
+                {
+                  "title": "Updated title",
+                  "dueDate": "%s",
+                  "dueTime": "16:45"
+                }
+                """.formatted(dueDate);
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.dueDate").value(dueDate))
+                .andExpect(jsonPath("$.dueTime").value("16:45"));
+
+        Reminder updatedReminder = reminderRepository.findById(reminder.getId()).orElseThrow();
+        assertThat(updatedReminder.getDueTime()).isEqualTo(LocalTime.of(16, 45));
+    }
+
+    @Test
+    void rejectsDueTimeWithoutDueDateWhenUpdating() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title",
+                LocalDate.now().plusDays(2),
+                null,
+                defaultReminderList
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Updated title\",\"dueDate\":null,\"dueTime\":\"16:45\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.dueTime").value("Due time requires a due date"));
     }
 
     @Test
@@ -290,7 +383,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsPastDueDateWhenUpdating() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, defaultReminderList));
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, null, defaultReminderList));
         String request = """
                 {
                   "title": "Updated title",
@@ -325,7 +418,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsUnsupportedDueDateYearWhenUpdating() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, defaultReminderList));
+        Reminder reminder = reminderRepository.save(new Reminder("Original title", null, null, defaultReminderList));
         String request = """
                 {
                   "title": "Updated title",
@@ -343,7 +436,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void marksAReminderAsCompleted() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Finish report", null, defaultReminderList));
+        Reminder reminder = reminderRepository.save(new Reminder("Finish report", null, null, defaultReminderList));
 
         mockMvc.perform(patch("/api/reminders/{id}/completion", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -354,7 +447,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void deletesAReminder() throws Exception {
-        Reminder reminder = reminderRepository.save(new Reminder("Remove me", null, defaultReminderList));
+        Reminder reminder = reminderRepository.save(new Reminder("Remove me", null, null, defaultReminderList));
 
         mockMvc.perform(delete("/api/reminders/{id}", reminder.getId()))
                 .andExpect(status().isNoContent());

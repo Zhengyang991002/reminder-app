@@ -30,6 +30,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  editDueTime: {
+    type: String,
+    required: true
+  },
   minimumDueDate: {
     type: String,
     required: true
@@ -48,7 +52,8 @@ const emit = defineEmits([
   'delete-reminder',
   'update:edit-title',
   'update:edit-due-date',
-  'validate-edit-due-date'
+  'update:edit-due-time',
+  'validate-edit-due-schedule'
 ])
 
 function completeReminder(reminder, event) {
@@ -79,8 +84,12 @@ function updateEditDueDate(value) {
   emit('update:edit-due-date', value)
 }
 
-function validateEditDueDate(event) {
-  emit('validate-edit-due-date', event)
+function updateEditDueTime(value) {
+  emit('update:edit-due-time', value)
+}
+
+function validateEditDueSchedule(event) {
+  emit('validate-edit-due-schedule', event)
 }
 </script>
 
@@ -96,6 +105,7 @@ function validateEditDueDate(event) {
       :is-saving="savingReminderIds.has(reminder.id)"
       :edit-title="editTitle"
       :edit-due-date="editDueDate"
+      :edit-due-time="editDueTime"
       :minimum-due-date="minimumDueDate"
       :maximum-due-date="maximumDueDate"
       @completion-change="completeReminder(reminder, $event)"
@@ -105,7 +115,8 @@ function validateEditDueDate(event) {
       @delete-reminder="deleteReminder(reminder)"
       @update:edit-title="updateEditTitle"
       @update:edit-due-date="updateEditDueDate"
-      @validate-edit-due-date="validateEditDueDate"
+      @update:edit-due-time="updateEditDueTime"
+      @validate-edit-due-schedule="validateEditDueSchedule"
     />
   </ul>
 </template>
