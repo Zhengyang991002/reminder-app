@@ -56,6 +56,14 @@ body {
   text-transform: uppercase;
 }
 
+.sidebar-section + .sidebar-section {
+  margin-top: 1.25rem;
+}
+
+.sidebar-section > .sidebar-heading {
+  margin-bottom: 0.75rem;
+}
+
 .list-navigation {
   display: grid;
   gap: 0.35rem;
@@ -73,7 +81,14 @@ body {
   min-width: 0;
 }
 
+.smart-list-navigation-item {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .list-select-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -81,12 +96,24 @@ body {
   color: #1d1d1f;
   font: inherit;
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   background: transparent;
   border: 0;
   border-radius: 0.4rem;
   cursor: pointer;
+}
+
+.list-select-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-count {
+  flex: 0 0 auto;
+  color: #6e6e73;
+  font-size: 0.75rem;
 }
 
 .list-select-button:hover,
@@ -97,6 +124,10 @@ body {
 .list-select-button.is-selected {
   color: #fff;
   background: #007aff;
+}
+
+.list-select-button.is-selected .list-count {
+  color: inherit;
 }
 
 .list-actions-toggle {

@@ -8,7 +8,7 @@ const minimumDueDate = getTodayDate()
 const maximumDueDate = '9999-12-31'
 const reminders = ref([])
 const lists = ref([])
-const selectedListId = ref(null)
+const selectedView = ref({ type: 'list', id: null })
 const loading = ref(true)
 const error = ref('')
 const submitting = ref(false)
@@ -30,15 +30,21 @@ const savingReminderIds = reactive(new Set())
 const deletingListIds = reactive(new Set())
 const form = reactive({
   title: '',
-  dueDate: ''
+  dueDate: '',
+  dueTime: ''
 })
 const editForm = reactive({
   title: '',
-  dueDate: ''
+  dueDate: '',
+  dueTime: ''
 })
-const selectedList = computed(() =>
-  lists.value.find(({ id }) => id === selectedListId.value) ?? null
-)
+const selectedList = computed(() => {
+  if (selectedView.value.type !== 'list') {
+    return null
+  }
+
+  return lists.value.find(({ id }) => id === selectedView.value.id) ?? null
+})
 const defaultListId = computed(() => {
   const defaultLists = lists.value.filter((list) => list.name === 'Reminders')
 
@@ -47,10 +53,49 @@ const defaultListId = computed(() => {
     null
   )
 })
-const heading = computed(() => selectedList.value?.name ?? 'Reminders')
-const filteredReminders = computed(() =>
-  reminders.value.filter((reminder) => reminder.listId === selectedListId.value)
-)
+const smartLists = computed(() => {
+  const today = getTodayDate()
+
+  return [
+    {
+      key: 'today',
+      name: 'Today',
+      count: reminders.value.filter((reminder) => reminder.dueDate === today).length
+    },
+    {
+      key: 'scheduled',
+      name: 'Scheduled',
+      count: reminders.value.filter((reminder) => reminder.dueDate != null).length
+    },
+    {
+      key: 'all',
+      name: 'All',
+      count: reminders.value.length
+    }
+  ]
+})
+const heading = computed(() => {
+  if (selectedView.value.type === 'smart') {
+    return smartLists.value.find((smartList) => smartList.key === selectedView.value.key)?.name ?? 'Reminders'
+  }
+
+  return selectedList.value?.name ?? 'Reminders'
+})
+const filteredReminders = computed(() => {
+  if (selectedView.value.type === 'smart') {
+    if (selectedView.value.key === 'today') {
+      return reminders.value.filter((reminder) => reminder.dueDate === getTodayDate())
+    }
+
+    if (selectedView.value.key === 'scheduled') {
+      return reminders.value.filter((reminder) => reminder.dueDate != null)
+    }
+
+    return reminders.value
+  }
+
+  return reminders.value.filter((reminder) => reminder.listId === selectedView.value.id)
+})
 
 function getTodayDate() {
   const today = new Date()
@@ -129,7 +174,10 @@ async function loadLists() {
 }
 
 function selectDefaultList() {
-  selectedListId.value = defaultListId.value ?? lists.value[0]?.id ?? null
+  selectedView.value = {
+    type: 'list',
+    id: defaultListId.value ?? lists.value[0]?.id ?? null
+  }
 }
 
 onMounted(async () => {
@@ -144,7 +192,11 @@ onMounted(async () => {
 })
 
 function selectList(listId) {
-  selectedListId.value = listId
+  selectedView.value = { type: 'list', id: listId }
+}
+
+function selectSmartList(key) {
+  selectedView.value = { type: 'smart', key }
 }
 
 function showNewListForm() {
@@ -192,7 +244,7 @@ async function createList() {
 
     const createdList = await response.json()
     lists.value = [...lists.value, createdList]
-    selectedListId.value = createdList.id
+    selectedView.value = { type: 'list', id: createdList.id }
     showingNewListForm.value = false
     newListName.value = ''
   } catch {
@@ -458,7 +510,8 @@ async function saveReminder(reminder) {
   <main class="app-shell">
     <ReminderListSidebar
       :lists="lists"
-      :selected-list-id="selectedListId"
+      :smart-lists="smartLists"
+      :selected-view="selectedView"
       :default-list-id="defaultListId"
       :showing-new-list-form="showingNewListForm"
       :new-list-name="newListName"
@@ -469,6 +522,7 @@ async function saveReminder(reminder) {
       :deleting-list-ids="deletingListIds"
       :list-error="listError"
       @select-list="selectList"
+      @select-smart-list="selectSmartList"
       @show-new-list="showNewListForm"
       @cancel-new-list="cancelNewList"
       @create-list="createList"
