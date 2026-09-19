@@ -1,5 +1,6 @@
 package com.example.reminders.reminder.dto;
 
+import com.example.reminders.reminder.ReminderPriority;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import java.time.Instant;
@@ -14,6 +15,7 @@ public record ReminderResponse(
         LocalDate dueDate,
         @JsonFormat(pattern = "HH:mm")
         LocalTime dueTime,
+        ReminderPriority priority,
         Long listId
 ) {
 }

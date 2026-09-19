@@ -31,12 +31,14 @@ const deletingListIds = reactive(new Set())
 const form = reactive({
   title: '',
   dueDate: '',
-  dueTime: ''
+  dueTime: '',
+  priority: 'NONE'
 })
 const editForm = reactive({
   title: '',
   dueDate: '',
-  dueTime: ''
+  dueTime: '',
+  priority: 'NONE'
 })
 const selectedList = computed(() => {
   if (selectedView.value.type !== 'list') {
@@ -179,6 +181,14 @@ async function loadReminders() {
   }
 
   reminders.value = await response.json()
+}
+
+async function refreshRemindersAfterMutation() {
+  try {
+    await loadReminders()
+  } catch {
+    // Keep the successful local mutation if the follow-up read fails.
+  }
 }
 
 async function loadLists() {
@@ -388,6 +398,7 @@ async function createReminder() {
         title: form.title,
         dueDate: form.dueDate || null,
         dueTime: form.dueTime || null,
+        priority: form.priority,
         listId
       })
     })
@@ -398,9 +409,11 @@ async function createReminder() {
 
     const reminder = await response.json()
     reminders.value = [reminder, ...reminders.value]
+    await refreshRemindersAfterMutation()
     form.title = ''
     form.dueDate = ''
     form.dueTime = ''
+    form.priority = 'NONE'
   } catch {
     submissionError.value = 'Unable to create reminder.'
   } finally {
@@ -436,6 +449,8 @@ async function updateCompletion(reminder, event) {
     if (reminderIndex !== -1) {
       reminders.value.splice(reminderIndex, 1, updatedReminder)
     }
+
+    await refreshRemindersAfterMutation()
   } catch {
     event.target.checked = reminder.completed
     completionError.value = 'Unable to update reminder completion.'
@@ -474,6 +489,7 @@ function startEditing(reminder) {
   editForm.title = reminder.title
   editForm.dueDate = reminder.dueDate || ''
   editForm.dueTime = toTimeInputValue(reminder.dueTime)
+  editForm.priority = reminder.priority || 'NONE'
   editError.value = ''
 }
 
@@ -506,7 +522,8 @@ async function saveReminder(reminder) {
       body: JSON.stringify({
         title: editForm.title,
         dueDate: editForm.dueDate || null,
-        dueTime: editForm.dueTime || null
+        dueTime: editForm.dueTime || null,
+        priority: editForm.priority
       })
     })
 
@@ -520,6 +537,8 @@ async function saveReminder(reminder) {
     if (reminderIndex !== -1) {
       reminders.value.splice(reminderIndex, 1, updatedReminder)
     }
+
+    await refreshRemindersAfterMutation()
 
     if (editingReminderId.value === reminder.id) {
       editingReminderId.value = null
@@ -567,12 +586,14 @@ async function saveReminder(reminder) {
         :title="form.title"
         :due-date="form.dueDate"
         :due-time="form.dueTime"
+        :priority="form.priority"
         :submitting="submitting"
         :minimum-due-date="minimumDueDate"
         :maximum-due-date="maximumDueDate"
         @update:title="form.title = $event"
         @update:due-date="form.dueDate = $event"
         @update:due-time="form.dueTime = $event"
+        @update:priority="form.priority = $event"
         @submit="createReminder"
         @validate-due-schedule="validateCreateDueSchedule"
       />
@@ -596,6 +617,7 @@ async function saveReminder(reminder) {
         :edit-title="editForm.title"
         :edit-due-date="editForm.dueDate"
         :edit-due-time="editForm.dueTime"
+        :edit-priority="editForm.priority"
         :minimum-due-date="minimumDueDate"
         :maximum-due-date="maximumDueDate"
         @completion-change="updateCompletion"
@@ -606,6 +628,7 @@ async function saveReminder(reminder) {
         @update:edit-title="editForm.title = $event"
         @update:edit-due-date="editForm.dueDate = $event"
         @update:edit-due-time="editForm.dueTime = $event"
+        @update:edit-priority="editForm.priority = $event"
         @validate-edit-due-schedule="validateEditDueSchedule"
       />
     </section>

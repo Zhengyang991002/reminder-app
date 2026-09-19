@@ -12,6 +12,10 @@ defineProps({
     type: String,
     required: true
   },
+  priority: {
+    type: String,
+    required: true
+  },
   submitting: {
     type: Boolean,
     required: true
@@ -30,6 +34,7 @@ const emit = defineEmits([
   'update:title',
   'update:due-date',
   'update:due-time',
+  'update:priority',
   'submit',
   'validate-due-schedule'
 ])
@@ -44,6 +49,10 @@ function updateDueDate(event) {
 
 function updateDueTime(event) {
   emit('update:due-time', event.target.value)
+}
+
+function updatePriority(event) {
+  emit('update:priority', event.target.value)
 }
 
 function validateDueSchedule(event) {
@@ -92,6 +101,16 @@ function submitForm() {
         @change="validateDueSchedule"
         @invalid="validateDueSchedule"
       />
+    </label>
+
+    <label>
+      <span>Priority</span>
+      <select :value="priority" @change="updatePriority">
+        <option value="NONE">None</option>
+        <option value="LOW">Low</option>
+        <option value="MEDIUM">Medium</option>
+        <option value="HIGH">High</option>
+      </select>
     </label>
 
     <button type="submit" :disabled="submitting">

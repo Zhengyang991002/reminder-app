@@ -32,6 +32,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  editPriority: {
+    type: String,
+    required: true
+  },
   minimumDueDate: {
     type: String,
     required: true
@@ -51,6 +55,7 @@ const emit = defineEmits([
   'update:edit-title',
   'update:edit-due-date',
   'update:edit-due-time',
+  'update:edit-priority',
   'validate-edit-due-schedule'
 ])
 
@@ -65,6 +70,12 @@ const dueTimeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: '2-digit'
 })
 
+const priorityLabels = {
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High'
+}
+
 function updateEditTitle(event) {
   emit('update:edit-title', event.target.value.trim())
 }
@@ -75,6 +86,10 @@ function updateEditDueDate(event) {
 
 function updateEditDueTime(event) {
   emit('update:edit-due-time', event.target.value)
+}
+
+function updateEditPriority(event) {
+  emit('update:edit-priority', event.target.value)
 }
 
 function validateEditDueSchedule(event) {
@@ -93,6 +108,10 @@ function formatDueSchedule(reminder) {
   const formattedDate = dueDateFormatter.format(dueDate)
 
   return `${formattedDate} · ${dueTimeFormatter.format(dueDate)}`
+}
+
+function priorityLabel(priority) {
+  return priorityLabels[priority] ?? ''
 }
 </script>
 
@@ -139,6 +158,16 @@ function formatDueSchedule(reminder) {
         />
       </label>
 
+      <label>
+        <span>Priority</span>
+        <select :value="editPriority" @change="updateEditPriority">
+          <option value="NONE">None</option>
+          <option value="LOW">Low</option>
+          <option value="MEDIUM">Medium</option>
+          <option value="HIGH">High</option>
+        </select>
+      </label>
+
       <div class="edit-actions">
         <button type="submit" :disabled="isSaving">
           {{ isSaving ? 'Saving...' : 'Save' }}
@@ -158,6 +187,9 @@ function formatDueSchedule(reminder) {
           @change="emit('completion-change', $event)"
         />
         <span :class="{ completed: reminder.completed }">{{ reminder.title }}</span>
+        <span v-if="priorityLabel(reminder.priority)" class="priority-indicator">
+          {{ priorityLabel(reminder.priority) }}
+        </span>
       </label>
       <div class="reminder-actions">
         <time

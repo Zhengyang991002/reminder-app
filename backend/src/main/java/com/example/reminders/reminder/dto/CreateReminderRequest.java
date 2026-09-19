@@ -1,5 +1,6 @@
 package com.example.reminders.reminder.dto;
 
+import com.example.reminders.reminder.ReminderPriority;
 import com.example.reminders.reminder.validation.DueSchedule;
 import com.example.reminders.reminder.validation.SupportedDueDateYear;
 import com.example.reminders.reminder.validation.ValidDueSchedule;
@@ -21,6 +22,7 @@ public record CreateReminderRequest(
         LocalDate dueDate,
         @JsonFormat(pattern = "HH:mm")
         LocalTime dueTime,
+        ReminderPriority priority,
         Long listId
 ) implements DueSchedule {
 }

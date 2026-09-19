@@ -36,4 +36,39 @@ class ReminderTest {
         assertThat(reminder.getDueDate()).isEqualTo(dueDate);
         assertThat(reminder.getDueTime()).isNull();
     }
+
+    @Test
+    void defaultsOmittedPriorityToNone() {
+        Reminder reminder = new Reminder("Call dentist", null, null, reminderList);
+
+        assertThat(reminder.getPriority()).isEqualTo(ReminderPriority.NONE);
+    }
+
+    @Test
+    void preservesCurrentPriorityWhenUpdatingWithoutPriority() {
+        Reminder reminder = new Reminder(
+                "Call dentist",
+                null,
+                null,
+                ReminderPriority.HIGH,
+                reminderList
+        );
+
+        reminder.update("Call dentist", null, null);
+
+        assertThat(reminder.getPriority()).isEqualTo(ReminderPriority.HIGH);
+    }
+
+    @Test
+    void rejectsNullPriority() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new Reminder("Call dentist", null, null, null, reminderList))
+                .withMessage("Priority must not be null");
+
+        Reminder reminder = new Reminder("Call dentist", null, null, reminderList);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> reminder.update("Call dentist", null, null, null))
+                .withMessage("Priority must not be null");
+    }
 }

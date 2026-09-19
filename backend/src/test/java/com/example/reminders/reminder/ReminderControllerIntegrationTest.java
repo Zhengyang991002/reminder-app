@@ -8,11 +8,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -90,6 +93,55 @@ class ReminderControllerIntegrationTest {
         Reminder createdReminder = reminderRepository.findAll().get(0);
         assertThat(createdReminder.getDueDate()).isNull();
         assertThat(createdReminder.getDueTime()).isNull();
+    }
+
+    @Test
+    void defaultsOmittedPriorityToNoneWhenCreating() throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"No priority\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value("NONE"));
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getPriority()).isEqualTo(ReminderPriority.NONE);
+    }
+
+    @Test
+    void createsReminderWithExplicitNonePriority() throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"No priority\",\"priority\":\"NONE\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value("NONE"));
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getPriority()).isEqualTo(ReminderPriority.NONE);
+    }
+
+    @Test
+    void createsReminderWithLowPriority() throws Exception {
+        createReminderWithPriority(ReminderPriority.LOW);
+    }
+
+    @Test
+    void createsReminderWithMediumPriority() throws Exception {
+        createReminderWithPriority(ReminderPriority.MEDIUM);
+    }
+
+    @Test
+    void createsReminderWithHighPriority() throws Exception {
+        createReminderWithPriority(ReminderPriority.HIGH);
+    }
+
+    @Test
+    void rejectsInvalidPriorityWhenCreating() throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Invalid priority\",\"priority\":\"URGENT\"}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(reminderRepository.count()).isZero();
     }
 
     @Test
@@ -303,6 +355,85 @@ class ReminderControllerIntegrationTest {
     }
 
     @Test
+    void updatesPriorityFromNoneToHigh() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title",
+                null,
+                null,
+                defaultReminderList
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Updated title\",\"dueDate\":null,\"priority\":\"HIGH\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priority").value("HIGH"));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getPriority())
+                .isEqualTo(ReminderPriority.HIGH);
+    }
+
+    @Test
+    void updatesPriorityFromHighToLow() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title",
+                null,
+                null,
+                ReminderPriority.HIGH,
+                defaultReminderList
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Updated title\",\"dueDate\":null,\"priority\":\"LOW\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priority").value("LOW"));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getPriority())
+                .isEqualTo(ReminderPriority.LOW);
+    }
+
+    @Test
+    void defaultsOmittedPriorityToNoneWhenUpdating() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title",
+                null,
+                null,
+                ReminderPriority.HIGH,
+                defaultReminderList
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Updated title\",\"dueDate\":null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priority").value("NONE"));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getPriority())
+                .isEqualTo(ReminderPriority.NONE);
+    }
+
+    @Test
+    void defaultsNullPriorityToNoneWhenUpdating() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title",
+                null,
+                null,
+                ReminderPriority.HIGH,
+                defaultReminderList
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Updated title\",\"dueDate\":null,\"priority\":null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priority").value("NONE"));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getPriority())
+                .isEqualTo(ReminderPriority.NONE);
+    }
+
+    @Test
     void updatesAReminderDueTime() throws Exception {
         String dueDate = LocalDate.now().plusDays(2).toString();
         Reminder reminder = reminderRepository.save(new Reminder(
@@ -435,6 +566,138 @@ class ReminderControllerIntegrationTest {
     }
 
     @Test
+    void ordersRemindersByCompletionScheduleTimePriorityAndCreationTime() throws Exception {
+        LocalDate firstDate = LocalDate.of(2030, 1, 10);
+        LocalDate secondDate = firstDate.plusDays(1);
+        LocalDate timeComparisonDate = firstDate.plusDays(2);
+        LocalDate priorityComparisonDate = firstDate.plusDays(3);
+        LocalDate creationTimeComparisonDate = firstDate.plusDays(4);
+
+        saveReminder(
+                "earlier date low priority",
+                false,
+                firstDate,
+                null,
+                ReminderPriority.LOW,
+                Instant.parse("2026-01-01T08:00:00Z")
+        );
+        saveReminder(
+                "later date high priority",
+                false,
+                secondDate,
+                null,
+                ReminderPriority.HIGH,
+                Instant.parse("2026-01-01T08:01:00Z")
+        );
+        saveReminder(
+                "same date 09:00 low priority",
+                false,
+                timeComparisonDate,
+                LocalTime.of(9, 0),
+                ReminderPriority.LOW,
+                Instant.parse("2026-01-01T08:02:00Z")
+        );
+        saveReminder(
+                "same date 14:00 high priority",
+                false,
+                timeComparisonDate,
+                LocalTime.of(14, 0),
+                ReminderPriority.HIGH,
+                Instant.parse("2026-01-01T08:03:00Z")
+        );
+        saveReminder(
+                "same date no time high priority",
+                false,
+                timeComparisonDate,
+                null,
+                ReminderPriority.HIGH,
+                Instant.parse("2026-01-01T08:04:00Z")
+        );
+        saveReminder(
+                "priority high",
+                false,
+                priorityComparisonDate,
+                LocalTime.NOON,
+                ReminderPriority.HIGH,
+                Instant.parse("2026-01-01T08:05:00Z")
+        );
+        saveReminder(
+                "priority medium",
+                false,
+                priorityComparisonDate,
+                LocalTime.NOON,
+                ReminderPriority.MEDIUM,
+                Instant.parse("2026-01-01T08:06:00Z")
+        );
+        saveReminder(
+                "priority low",
+                false,
+                priorityComparisonDate,
+                LocalTime.NOON,
+                ReminderPriority.LOW,
+                Instant.parse("2026-01-01T08:07:00Z")
+        );
+        saveReminder(
+                "priority none",
+                false,
+                priorityComparisonDate,
+                LocalTime.NOON,
+                ReminderPriority.NONE,
+                Instant.parse("2026-01-01T08:08:00Z")
+        );
+        saveReminder(
+                "newer created at",
+                false,
+                creationTimeComparisonDate,
+                LocalTime.NOON,
+                ReminderPriority.MEDIUM,
+                Instant.parse("2026-01-02T08:00:00Z")
+        );
+        saveReminder(
+                "older created at",
+                false,
+                creationTimeComparisonDate,
+                LocalTime.NOON,
+                ReminderPriority.MEDIUM,
+                Instant.parse("2026-01-01T08:00:00Z")
+        );
+        saveReminder(
+                "unscheduled high priority",
+                false,
+                null,
+                null,
+                ReminderPriority.HIGH,
+                Instant.parse("2026-01-01T08:09:00Z")
+        );
+        saveReminder(
+                "completed earliest date high priority",
+                true,
+                firstDate.minusDays(1),
+                LocalTime.of(8, 0),
+                ReminderPriority.HIGH,
+                Instant.parse("2026-01-01T08:10:00Z")
+        );
+
+        mockMvc.perform(get("/api/reminders"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].title", contains(
+                        "earlier date low priority",
+                        "later date high priority",
+                        "same date 09:00 low priority",
+                        "same date 14:00 high priority",
+                        "same date no time high priority",
+                        "priority high",
+                        "priority medium",
+                        "priority low",
+                        "priority none",
+                        "newer created at",
+                        "older created at",
+                        "unscheduled high priority",
+                        "completed earliest date high priority"
+                )));
+    }
+
+    @Test
     void marksAReminderAsCompleted() throws Exception {
         Reminder reminder = reminderRepository.save(new Reminder("Finish report", null, null, defaultReminderList));
 
@@ -472,5 +735,30 @@ class ReminderControllerIntegrationTest {
         mockMvc.perform(delete("/api/reminders/{id}", 9999))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Reminder with id 9999 was not found"));
+    }
+
+    private void createReminderWithPriority(ReminderPriority priority) throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Priority reminder\",\"priority\":\"" + priority + "\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value(priority.name()));
+
+        Reminder createdReminder = reminderRepository.findAll().get(0);
+        assertThat(createdReminder.getPriority()).isEqualTo(priority);
+    }
+
+    private void saveReminder(
+            String title,
+            boolean completed,
+            LocalDate dueDate,
+            LocalTime dueTime,
+            ReminderPriority priority,
+            Instant createdAt
+    ) {
+        Reminder reminder = new Reminder(title, dueDate, dueTime, priority, defaultReminderList);
+        reminder.setCompleted(completed);
+        ReflectionTestUtils.setField(reminder, "createdAt", createdAt);
+        reminderRepository.saveAndFlush(reminder);
     }
 }

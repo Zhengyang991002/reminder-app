@@ -34,6 +34,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  editPriority: {
+    type: String,
+    required: true
+  },
   minimumDueDate: {
     type: String,
     required: true
@@ -53,6 +57,7 @@ const emit = defineEmits([
   'update:edit-title',
   'update:edit-due-date',
   'update:edit-due-time',
+  'update:edit-priority',
   'validate-edit-due-schedule'
 ])
 
@@ -88,6 +93,10 @@ function updateEditDueTime(value) {
   emit('update:edit-due-time', value)
 }
 
+function updateEditPriority(value) {
+  emit('update:edit-priority', value)
+}
+
 function validateEditDueSchedule(event) {
   emit('validate-edit-due-schedule', event)
 }
@@ -106,6 +115,7 @@ function validateEditDueSchedule(event) {
       :edit-title="editTitle"
       :edit-due-date="editDueDate"
       :edit-due-time="editDueTime"
+      :edit-priority="editPriority"
       :minimum-due-date="minimumDueDate"
       :maximum-due-date="maximumDueDate"
       @completion-change="completeReminder(reminder, $event)"
@@ -116,6 +126,7 @@ function validateEditDueSchedule(event) {
       @update:edit-title="updateEditTitle"
       @update:edit-due-date="updateEditDueDate"
       @update:edit-due-time="updateEditDueTime"
+      @update:edit-priority="updateEditPriority"
       @validate-edit-due-schedule="validateEditDueSchedule"
     />
   </ul>

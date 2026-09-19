@@ -2,6 +2,8 @@ package com.example.reminders.reminder;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -36,6 +38,10 @@ public class Reminder {
     @Column(name = "due_time")
     private LocalTime dueTime;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "priority", nullable = false, length = 20)
+    private ReminderPriority priority = ReminderPriority.NONE;
+
     @ManyToOne(optional = false)
     @JoinColumn(name = "list_id", nullable = false)
     private ReminderList list;
@@ -45,12 +51,23 @@ public class Reminder {
     }
 
     public Reminder(String title, LocalDate dueDate, LocalTime dueTime, ReminderList list) {
+        this(title, dueDate, dueTime, ReminderPriority.NONE, list);
+    }
+
+    public Reminder(
+            String title,
+            LocalDate dueDate,
+            LocalTime dueTime,
+            ReminderPriority priority,
+            ReminderList list
+    ) {
         validateDueSchedule(dueDate, dueTime);
         this.title = title;
         this.completed = false;
         this.createdAt = Instant.now();
         this.dueDate = dueDate;
         this.dueTime = dueTime;
+        this.priority = requirePriority(priority);
         this.list = list;
     }
 
@@ -78,6 +95,10 @@ public class Reminder {
         return dueTime;
     }
 
+    public ReminderPriority getPriority() {
+        return priority;
+    }
+
     public ReminderList getList() {
         return list;
     }
@@ -87,10 +108,15 @@ public class Reminder {
     }
 
     public void update(String title, LocalDate dueDate, LocalTime dueTime) {
+        update(title, dueDate, dueTime, priority);
+    }
+
+    public void update(String title, LocalDate dueDate, LocalTime dueTime, ReminderPriority priority) {
         validateDueSchedule(dueDate, dueTime);
         this.title = title;
         this.dueDate = dueDate;
         this.dueTime = dueTime;
+        this.priority = requirePriority(priority);
     }
 
     public void setCompleted(boolean completed) {
@@ -101,5 +127,12 @@ public class Reminder {
         if (dueTime != null && dueDate == null) {
             throw new IllegalArgumentException("Due time requires a due date");
         }
+    }
+
+    private ReminderPriority requirePriority(ReminderPriority priority) {
+        if (priority == null) {
+            throw new IllegalArgumentException("Priority must not be null");
+        }
+        return priority;
     }
 }
