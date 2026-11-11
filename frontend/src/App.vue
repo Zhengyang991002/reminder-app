@@ -7,21 +7,24 @@ import { normalizeNotes, validateNotes } from './notes.js'
 
 const minimumDueDate = getTodayDate()
 const maximumDueDate = '9999-12-31'
-const reminders = ref([])
-let remindersRequestId = 0
 const lists = ref([])
 let listsRequestId = 0
+const listsLoading = ref(true)
+const listsLoadError = ref('')
+const viewCounts = ref(null)
+let countsRequestId = 0
+const countsError = ref('')
 const selectedView = ref({ type: 'list', id: null })
-const loading = ref(true)
-const error = ref('')
 const searchQuery = ref('')
 const searchMode = ref('global')
 const searchInput = ref(null)
-const searchResults = ref([])
-const searchLoading = ref(false)
-const searchError = ref('')
+const pageSize = 20
+const pageNumber = ref(0)
+const pageResult = ref(null)
+const pageLoading = ref(true)
+const pageError = ref('')
 let searchTimer = null
-let searchRequest = null
+let pageRequest = null
 const submitting = ref(false)
 const submissionError = ref('')
 const completionError = ref('')
@@ -68,27 +71,11 @@ const defaultListId = computed(() => {
     null
   )
 })
-const smartLists = computed(() => {
-  const today = getTodayDate()
-
-  return [
-    {
-      key: 'today',
-      name: 'Today',
-      count: reminders.value.filter((reminder) => reminder.dueDate === today).length
-    },
-    {
-      key: 'scheduled',
-      name: 'Scheduled',
-      count: reminders.value.filter((reminder) => reminder.dueDate != null).length
-    },
-    {
-      key: 'all',
-      name: 'All',
-      count: reminders.value.length
-    }
-  ]
-})
+const smartLists = computed(() => [
+  { key: 'today', name: 'Today', count: viewCounts.value?.today ?? '—' },
+  { key: 'scheduled', name: 'Scheduled', count: viewCounts.value?.scheduled ?? '—' },
+  { key: 'all', name: 'All', count: viewCounts.value?.all ?? '—' }
+])
 const heading = computed(() => {
   if (selectedView.value.type === 'smart') {
     return smartLists.value.find((smartList) => smartList.key === selectedView.value.key)?.name ?? 'Reminders'
@@ -96,52 +83,46 @@ const heading = computed(() => {
 
   return selectedList.value?.name ?? 'Reminders'
 })
-const filteredReminders = computed(() => {
-  if (selectedView.value.type === 'smart') {
-    if (selectedView.value.key === 'today') {
-      return reminders.value.filter((reminder) => reminder.dueDate === getTodayDate())
-    }
-
-    if (selectedView.value.key === 'scheduled') {
-      return reminders.value.filter((reminder) => reminder.dueDate != null)
-    }
-
-    return reminders.value
-  }
-
-  return reminders.value.filter((reminder) => reminder.listId === selectedView.value.id)
-})
-const searchUrl = computed(getSearchUrl)
+const selectedViewKey = computed(() => selectedView.value.type === 'list'
+  ? `list:${selectedView.value.id}`
+  : selectedView.value.key)
+const searchTerm = computed(() => normalizeNotes(searchQuery.value))
 const displayHeading = computed(() => {
-  if (searchUrl.value && searchMode.value === 'global') {
+  if (searchTerm.value && searchMode.value === 'global') {
     return 'Search all reminders'
   }
 
   return heading.value
 })
-const displayedReminders = computed(() => searchUrl.value ? searchResults.value : filteredReminders.value)
+const displayedReminders = computed(() => pageResult.value?.content ?? [])
 
-watch(searchUrl, (url) => {
-  cancelPendingSearch()
-  searchResults.value = []
-  searchError.value = ''
-  searchLoading.value = Boolean(url)
+watch([selectedViewKey, searchTerm, searchMode], ([, term], [, previousTerm]) => {
+  cancelPendingPage()
+  pageNumber.value = 0
+  pageResult.value = null
+  pageError.value = ''
+  pageLoading.value = true
 
-  if (url) {
-    searchTimer = setTimeout(loadSearchResults, 300)
+  if (term && term !== previousTerm) {
+    searchTimer = setTimeout(loadPage, 300)
+  } else {
+    void loadPage()
   }
 }, { flush: 'sync' })
 
-onBeforeUnmount(cancelPendingSearch)
+onBeforeUnmount(() => {
+  cancelPendingPage()
+  countsRequestId += 1
+  listsRequestId += 1
+})
 
-function getSearchUrl() {
-  const query = normalizeNotes(searchQuery.value)
-  if (query === null) {
-    return null
+function getPageUrl() {
+  const scope = searchTerm.value ? searchMode.value : 'view'
+  const params = new URLSearchParams({ scope })
+  if (searchTerm.value) {
+    params.set('q', searchTerm.value)
   }
-
-  const params = new URLSearchParams({ q: query, scope: searchMode.value })
-  if (searchMode.value === 'view') {
+  if (scope === 'view') {
     const view = selectedView.value
     if (view.type === 'list') {
       if (view.id === null) {
@@ -157,7 +138,7 @@ function getSearchUrl() {
     }
   }
 
-  return `/api/reminders?${params}`
+  return `/api/reminders/page?${params}`
 }
 
 function getTodayDate() {
@@ -173,49 +154,74 @@ function clearSearch() {
   searchInput.value?.focus()
 }
 
-function cancelPendingSearch() {
+function cancelPendingPage() {
   clearTimeout(searchTimer)
   searchTimer = null
-  searchRequest?.abort()
-  searchRequest = null
+  pageRequest?.abort()
+  pageRequest = null
 }
 
-async function loadSearchResults() {
-  const url = getSearchUrl()
+async function changePage(page) {
+  if (!pageResult.value || pageLoading.value || pageError.value
+      || page < 0 || page >= pageResult.value.totalPages) {
+    return
+  }
+
+  pageNumber.value = page
+  await loadPage()
+}
+
+async function loadPage() {
+  const url = getPageUrl()
   if (!url) {
     return
   }
 
-  cancelPendingSearch()
+  cancelPendingPage()
   const request = new AbortController()
-  searchRequest = request
-  searchLoading.value = true
-  searchError.value = ''
-  let failureMessage = 'Unable to search reminders.'
+  pageRequest = request
+  pageLoading.value = true
+  pageError.value = ''
+  let failureMessage = searchTerm.value ? 'Unable to search reminders.' : 'Unable to load reminders.'
+  let page = pageNumber.value
 
   try {
-    const response = await fetch(url, { signal: request.signal })
-    if (!response.ok) {
-      const problem = await response.json().catch(() => null)
-      if (problem?.detail) {
-        failureMessage = problem.detail
+    while (true) {
+      const response = await fetch(`${url}&page=${page}&size=${pageSize}`, { signal: request.signal })
+      if (!response.ok) {
+        const problem = await response.json().catch(() => null)
+        if (problem?.detail) {
+          failureMessage = problem.detail
+        }
+        throw new Error(`Request failed with status ${response.status}`)
       }
-      throw new Error(`Request failed with status ${response.status}`)
-    }
 
-    const results = await response.json()
-    if (request === searchRequest) {
-      searchResults.value = results
+      const results = await response.json()
+      if (request !== pageRequest) {
+        return
+      }
+
+      // A deletion or edit can remove the last match on this page.
+      const lastPage = Math.max(0, results.totalPages - 1)
+      if (page > lastPage) {
+        page = lastPage
+        pageNumber.value = page
+        continue
+      }
+
+      pageResult.value = results
+      pageNumber.value = results.page
+      break
     }
   } catch {
-    if (request === searchRequest) {
-      searchResults.value = []
-      searchError.value = failureMessage
+    if (request === pageRequest) {
+      pageResult.value = null
+      pageError.value = failureMessage
     }
   } finally {
-    if (request === searchRequest) {
-      searchRequest = null
-      searchLoading.value = false
+    if (request === pageRequest) {
+      pageRequest = null
+      pageLoading.value = false
     }
   }
 }
@@ -286,60 +292,65 @@ function validateListName(name) {
   return ''
 }
 
-async function loadReminders() {
-  const requestId = ++remindersRequestId
-  const response = await fetch('/api/reminders')
+async function loadCounts() {
+  const requestId = ++countsRequestId
+  countsError.value = ''
+  try {
+    const params = new URLSearchParams({ today: getTodayDate() })
+    const response = await fetch(`/api/reminders/counts?${params}`)
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
 
-  if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`)
-  }
-
-  const results = await response.json()
-  if (requestId === remindersRequestId) {
-    reminders.value = results
+    const results = await response.json()
+    if (requestId === countsRequestId) {
+      viewCounts.value = results
+    }
+  } catch {
+    if (requestId === countsRequestId) {
+      countsError.value = 'Unable to refresh reminder counts.'
+    }
   }
 }
 
 async function refreshRemindersAfterMutation() {
-  const searchRefresh = loadSearchResults()
-  try {
-    await loadReminders()
-  } catch {
-    // Keep the successful local mutation if the follow-up read fails.
-  }
-  await searchRefresh
+  await Promise.all([loadPage(), loadCounts()])
 }
 
 async function loadLists() {
   const requestId = ++listsRequestId
-  const response = await fetch('/api/lists')
+  listsLoadError.value = ''
+  try {
+    const response = await fetch('/api/lists')
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`)
+    }
 
-  if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`)
-  }
-
-  const results = await response.json()
-  if (requestId === listsRequestId) {
-    lists.value = results
+    const results = await response.json()
+    if (requestId === listsRequestId) {
+      lists.value = results
+    }
+  } catch {
+    if (requestId === listsRequestId) {
+      listsLoadError.value = 'Unable to refresh reminder lists.'
+    }
   }
 }
 
 function selectDefaultList() {
-  selectedView.value = {
-    type: 'list',
-    id: defaultListId.value ?? lists.value[0]?.id ?? null
-  }
+  const listId = defaultListId.value ?? lists.value[0]?.id
+  selectedView.value = listId === undefined
+    ? { type: 'smart', key: 'all' }
+    : { type: 'list', id: listId }
 }
 
 onMounted(async () => {
-  try {
-    await Promise.all([loadReminders(), loadLists()])
+  void loadCounts()
+  await loadLists()
+  if (selectedView.value.type === 'list' && selectedView.value.id === null) {
     selectDefaultList()
-  } catch {
-    error.value = 'Unable to load reminders and lists.'
-  } finally {
-    loading.value = false
   }
+  listsLoading.value = false
 })
 
 function selectList(listId) {
@@ -399,6 +410,7 @@ async function createList() {
     selectedView.value = { type: 'list', id: createdList.id }
     showingNewListForm.value = false
     newListName.value = ''
+    await Promise.all([loadLists(), loadCounts()])
   } catch {
     listError.value = 'Unable to create reminder list.'
   } finally {
@@ -421,7 +433,7 @@ function cancelRenamingList() {
 }
 
 async function renameList(list) {
-  if (savingListId.value === list.id) {
+  if (savingListId.value !== null || deletingListIds.has(list.id)) {
     return
   }
 
@@ -457,8 +469,11 @@ async function renameList(list) {
       lists.value.splice(listIndex, 1, updatedList)
     }
 
-    editingListId.value = null
-    renameListName.value = ''
+    if (editingListId.value === list.id) {
+      editingListId.value = null
+      renameListName.value = ''
+    }
+    await loadLists()
   } catch {
     listError.value = 'Unable to rename reminder list.'
   } finally {
@@ -467,7 +482,7 @@ async function renameList(list) {
 }
 
 async function deleteList(listId) {
-  if (deletingListIds.has(listId)) {
+  if (deletingListIds.has(listId) || savingListId.value === listId) {
     return
   }
 
@@ -483,17 +498,18 @@ async function deleteList(listId) {
       throw new Error(`Request failed with status ${response.status}`)
     }
 
+    listsRequestId += 1
     lists.value = lists.value.filter(({ id }) => id !== listId)
+    let pageRefresh
     if (selectedView.value.type === 'list' && selectedView.value.id === listId) {
       editingReminderId.value = null
+      // Selecting the fallback triggers the page request through the watcher.
       selectDefaultList()
+    } else {
+      pageRefresh = loadPage()
     }
 
-    try {
-      await Promise.all([loadLists(), loadReminders(), loadSearchResults()])
-    } catch {
-      listError.value = 'List deleted, but unable to refresh reminders and lists.'
-    }
+    await Promise.all([loadLists(), loadCounts(), pageRefresh])
   } catch {
     listError.value = 'Unable to delete reminder list.'
   } finally {
@@ -535,14 +551,12 @@ async function createReminder() {
       throw new Error(`Request failed with status ${response.status}`)
     }
 
-    const reminder = await response.json()
-    reminders.value = [reminder, ...reminders.value]
-    await refreshRemindersAfterMutation()
     form.title = ''
     form.notes = ''
     form.dueDate = ''
     form.dueTime = ''
     form.priority = 'NONE'
+    await refreshRemindersAfterMutation()
   } catch {
     submissionError.value = 'Unable to create reminder.'
   } finally {
@@ -572,13 +586,6 @@ async function updateCompletion(reminder, event) {
       throw new Error(`Request failed with status ${response.status}`)
     }
 
-    const updatedReminder = await response.json()
-    const reminderIndex = reminders.value.findIndex(({ id }) => id === updatedReminder.id)
-
-    if (reminderIndex !== -1) {
-      reminders.value.splice(reminderIndex, 1, updatedReminder)
-    }
-
     await refreshRemindersAfterMutation()
   } catch {
     event.target.checked = reminder.completed
@@ -605,8 +612,6 @@ async function deleteReminder(reminder) {
       throw new Error(`Request failed with status ${response.status}`)
     }
 
-    reminders.value = reminders.value.filter(({ id }) => id !== reminder.id)
-    searchResults.value = searchResults.value.filter(({ id }) => id !== reminder.id)
     await refreshRemindersAfterMutation()
   } catch {
     deleteError.value = 'Unable to delete reminder.'
@@ -664,18 +669,10 @@ async function saveReminder(reminder) {
       throw new Error(`Request failed with status ${response.status}`)
     }
 
-    const updatedReminder = await response.json()
-    const reminderIndex = reminders.value.findIndex(({ id }) => id === updatedReminder.id)
-
-    if (reminderIndex !== -1) {
-      reminders.value.splice(reminderIndex, 1, updatedReminder)
-    }
-
-    await refreshRemindersAfterMutation()
-
     if (editingReminderId.value === reminder.id) {
       editingReminderId.value = null
     }
+    await refreshRemindersAfterMutation()
   } catch {
     editError.value = 'Unable to update reminder.'
   } finally {
@@ -689,6 +686,8 @@ async function saveReminder(reminder) {
     <ReminderListSidebar
       :lists="lists"
       :smart-lists="smartLists"
+      :list-counts="viewCounts?.lists"
+      :counts-error="countsError"
       :selected-view="selectedView"
       :default-list-id="defaultListId"
       :showing-new-list-form="showingNewListForm"
@@ -698,7 +697,7 @@ async function saveReminder(reminder) {
       :rename-list-name="renameListName"
       :saving-list-id="savingListId"
       :deleting-list-ids="deletingListIds"
-      :list-error="listError"
+      :list-error="listError || listsLoadError"
       @select-list="selectList"
       @select-smart-list="selectSmartList"
       @show-new-list="showNewListForm"
@@ -746,11 +745,11 @@ async function saveReminder(reminder) {
           v-model="searchQuery"
           type="text"
           placeholder="Search titles and notes"
-          :disabled="loading"
+          :disabled="listsLoading"
           @keydown.esc="clearSearch"
         >
         <label class="visually-hidden" for="search-mode">Search scope</label>
-        <select id="search-mode" v-model="searchMode" :disabled="loading">
+        <select id="search-mode" v-model="searchMode" :disabled="listsLoading">
           <option value="global">All reminders</option>
           <option value="view">Current view</option>
         </select>
@@ -759,12 +758,13 @@ async function saveReminder(reminder) {
         </button>
       </div>
 
-      <p v-if="searchUrl && searchLoading" role="status">Searching reminders...</p>
-      <p v-else-if="searchUrl && searchError" class="error" role="alert">{{ searchError }}</p>
-      <p v-else-if="!searchUrl && loading">Loading reminders and lists...</p>
-      <p v-else-if="!searchUrl && error" class="error" role="alert">{{ error }}</p>
+      <p v-if="pageLoading" role="status">{{ searchTerm ? 'Searching reminders...' : 'Loading reminders...' }}</p>
+      <div v-else-if="pageError">
+        <p class="error" role="alert">{{ pageError }}</p>
+        <button class="cancel-button" type="button" @click="loadPage">Retry</button>
+      </div>
       <p v-else-if="displayedReminders.length === 0" role="status">
-        {{ searchUrl ? 'No reminders match your search.' : 'No reminders yet.' }}
+        {{ searchTerm ? 'No reminders match your search.' : 'No reminders in this view.' }}
       </p>
 
       <ReminderList
@@ -793,6 +793,29 @@ async function saveReminder(reminder) {
         @update:edit-priority="editForm.priority = $event"
         @validate-edit-due-schedule="validateEditDueSchedule"
       />
+
+      <nav v-if="pageResult" class="reminder-pagination" aria-label="Reminder pages">
+        <button
+          class="cancel-button"
+          type="button"
+          :disabled="pageLoading || pageNumber === 0"
+          @click="changePage(pageNumber - 1)"
+        >
+          Previous
+        </button>
+        <span v-if="!pageLoading" role="status">
+          Page {{ pageResult.totalPages === 0 ? 0 : pageNumber + 1 }} of {{ pageResult.totalPages }}
+          · {{ pageResult.totalElements }} {{ searchTerm ? 'matching reminders' : 'reminders' }}
+        </span>
+        <button
+          class="cancel-button"
+          type="button"
+          :disabled="pageLoading || pageNumber + 1 >= pageResult.totalPages"
+          @click="changePage(pageNumber + 1)"
+        >
+          Next
+        </button>
+      </nav>
     </section>
   </main>
 </template>

@@ -3,16 +3,22 @@ package com.example.reminders.reminder;
 import com.example.reminders.common.BadRequestException;
 import com.example.reminders.common.ResourceNotFoundException;
 import com.example.reminders.reminder.dto.CreateReminderRequest;
+import com.example.reminders.reminder.dto.ReminderCountsResponse;
+import com.example.reminders.reminder.dto.ReminderPageResponse;
 import com.example.reminders.reminder.dto.ReminderResponse;
 import com.example.reminders.reminder.dto.UpdateCompletionRequest;
 import com.example.reminders.reminder.dto.UpdateReminderRequest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @Transactional(readOnly = true)
@@ -20,6 +26,7 @@ public class ReminderService {
 
     private static final String DEFAULT_REMINDER_LIST_NAME = "Reminders";
     private static final int MAX_SEARCH_QUERY_LENGTH = 200;
+    // Legacy array endpoint ordering; pageable queries reproduce it in ReminderRepository.PAGE_ORDER.
     private static final Comparator<Reminder> REMINDER_ORDER = Comparator
             .comparingInt((Reminder reminder) -> reminder.isCompleted() ? 1 : 0)
             .thenComparing(Reminder::getDueDate, Comparator.nullsLast(Comparator.naturalOrder()))
@@ -39,18 +46,13 @@ public class ReminderService {
     }
 
     public List<ReminderResponse> findAll(String query, String scope, String view, String listId, String today) {
-        String pattern = searchPattern(query);
-        List<Reminder> matches;
-        if (scope == null || "global".equals(scope)) {
-            if (view != null || listId != null || today != null) {
-                throw new BadRequestException("view, listId and today require scope=view");
-            }
-            matches = reminderRepository.searchAll(pattern);
-        } else if ("view".equals(scope)) {
-            matches = searchView(pattern, view, listId, today);
-        } else {
-            throw new BadRequestException("scope must be global or view");
-        }
+        SearchCriteria criteria = searchCriteria(query, scope, view, listId, today);
+        List<Reminder> matches = switch (criteria.view()) {
+            case "today" -> reminderRepository.searchByDate(criteria.pattern(), criteria.date());
+            case "scheduled" -> reminderRepository.searchScheduled(criteria.pattern());
+            case "list" -> reminderRepository.searchByList(criteria.pattern(), criteria.list());
+            default -> reminderRepository.searchAll(criteria.pattern());
+        };
 
         return matches.stream()
                 .sorted(REMINDER_ORDER)
@@ -58,7 +60,85 @@ public class ReminderService {
                 .toList();
     }
 
-    private List<Reminder> searchView(String pattern, String view, String listId, String today) {
+    public ReminderPageResponse findPage(
+            String query, String scope, String view, String listId, String today, String page, String size
+    ) {
+        PageRequest pageable = pageRequest(page, size);
+        SearchCriteria criteria = searchCriteria(query, scope, view, listId, today);
+        Page<Reminder> matches = switch (criteria.view()) {
+            case "today" -> reminderRepository.searchByDate(criteria.pattern(), criteria.date(), pageable);
+            case "scheduled" -> reminderRepository.searchScheduled(criteria.pattern(), pageable);
+            case "list" -> reminderRepository.searchByList(criteria.pattern(), criteria.list(), pageable);
+            default -> reminderRepository.searchAll(criteria.pattern(), pageable);
+        };
+
+        // The database has already filtered, ordered and limited this page.
+        int totalPages = matches.getTotalPages();
+        return new ReminderPageResponse(
+                matches.getContent().stream().map(this::toResponse).toList(),
+                matches.getNumber(),
+                matches.getSize(),
+                matches.getTotalElements(),
+                totalPages,
+                matches.isFirst(),
+                // Comparing with the last index avoids overflow at the largest page number.
+                matches.getNumber() >= totalPages - 1
+        );
+    }
+
+    public ReminderCountsResponse findCounts(String today) {
+        LocalDate date = parseToday(today, "today is required");
+        Map<Long, Long> lists = new LinkedHashMap<>();
+        long allCount = 0;
+        long todayCount = 0;
+        long scheduledCount = 0;
+        for (ReminderRepository.ViewCountRow row : reminderRepository.countByView(date)) {
+            lists.put(row.getListId(), row.getReminderCount());
+            allCount += row.getReminderCount();
+            todayCount += row.getTodayCount();
+            scheduledCount += row.getScheduledCount();
+        }
+        return new ReminderCountsResponse(allCount, todayCount, scheduledCount, lists);
+    }
+
+    private PageRequest pageRequest(String page, String size) {
+        int pageNumber = parsePageInteger(page, "page", 0);
+        int pageSize = parsePageInteger(size, "size", 20);
+        if (pageNumber < 0) {
+            throw new BadRequestException("page must be zero or greater");
+        }
+        if (pageSize < 1 || pageSize > 100) {
+            throw new BadRequestException("size must be between 1 and 100");
+        }
+        // JPA's setFirstResult accepts an int, even though Pageable uses a long offset.
+        if ((long) pageNumber * pageSize > Integer.MAX_VALUE) {
+            throw new BadRequestException("page and size exceed the supported database offset");
+        }
+        return PageRequest.of(pageNumber, pageSize);
+    }
+
+    private int parsePageInteger(String value, String name, int defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException exception) {
+            throw new BadRequestException(name + " must be a valid integer");
+        }
+    }
+
+    private SearchCriteria searchCriteria(String query, String scope, String view, String listId, String today) {
+        String pattern = searchPattern(query);
+        if (scope == null || "global".equals(scope)) {
+            if (view != null || listId != null || today != null) {
+                throw new BadRequestException("view, listId and today require scope=view");
+            }
+            return new SearchCriteria(pattern, "all", null, null);
+        }
+        if (!"view".equals(scope)) {
+            throw new BadRequestException("scope must be global or view");
+        }
         if (view == null) {
             throw new BadRequestException("view is required when scope=view");
         }
@@ -70,12 +150,16 @@ public class ReminderService {
         }
 
         return switch (view) {
-            case "all" -> reminderRepository.searchAll(pattern);
-            case "today" -> reminderRepository.searchByDate(pattern, parseToday(today));
-            case "scheduled" -> reminderRepository.searchScheduled(pattern);
-            case "list" -> reminderRepository.searchByList(pattern, getReminderList(parseListId(listId)));
+            case "all", "scheduled" -> new SearchCriteria(pattern, view, null, null);
+            case "today" -> new SearchCriteria(
+                    pattern, view, parseToday(today, "today is required when view=today"), null
+            );
+            case "list" -> new SearchCriteria(pattern, view, null, getReminderList(parseListId(listId)));
             default -> throw new BadRequestException("view must be all, today, scheduled or list");
         };
+    }
+
+    private record SearchCriteria(String pattern, String view, LocalDate date, ReminderList list) {
     }
 
     private String searchPattern(String query) {
@@ -106,9 +190,9 @@ public class ReminderService {
         }
     }
 
-    private LocalDate parseToday(String today) {
+    private LocalDate parseToday(String today, String requiredMessage) {
         if (today == null) {
-            throw new BadRequestException("today is required when view=today");
+            throw new BadRequestException(requiredMessage);
         }
         if (today.length() != 10) {
             throw new BadRequestException("today must use YYYY-MM-DD");

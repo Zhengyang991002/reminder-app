@@ -10,6 +10,14 @@ defineProps({
     type: Array,
     required: true
   },
+  listCounts: {
+    type: Object,
+    default: null
+  },
+  countsError: {
+    type: String,
+    default: ''
+  },
   selectedView: {
     type: Object,
     required: true
@@ -116,6 +124,7 @@ function startRenamingList(list) {
           </button>
         </li>
       </ul>
+      <p v-if="countsError" class="error sidebar-error" role="alert">{{ countsError }}</p>
     </section>
 
     <section class="sidebar-section" aria-label="My lists">
@@ -176,11 +185,11 @@ function startRenamingList(list) {
               :value="renameListName"
               maxlength="100"
               required
-              :disabled="savingListId === list.id"
+              :disabled="savingListId !== null || deletingListIds.has(list.id)"
               @input="emit('update:rename-list-name', $event.target.value)"
             >
             <div class="inline-list-actions">
-              <button class="sidebar-action-button" type="submit" :disabled="savingListId === list.id">
+              <button class="sidebar-action-button" type="submit" :disabled="savingListId !== null || deletingListIds.has(list.id)">
                 {{ savingListId === list.id ? 'Saving…' : 'Save' }}
               </button>
               <button
@@ -207,6 +216,7 @@ function startRenamingList(list) {
               @click="selectList(list.id)"
             >
               <span class="list-select-name">{{ list.name }}</span>
+              <span class="list-count">{{ listCounts ? (listCounts[list.id] ?? 0) : '—' }}</span>
             </button>
 
             <button
@@ -216,7 +226,7 @@ function startRenamingList(list) {
               :aria-label="`Actions for ${list.name}`"
               :aria-expanded="openActionsListId === list.id"
               :aria-controls="`list-actions-${list.id}`"
-              :disabled="deletingListIds.has(list.id)"
+              :disabled="deletingListIds.has(list.id) || savingListId === list.id"
               @click.stop="toggleListActions(list.id)"
             >
               <span aria-hidden="true">…</span>
@@ -232,7 +242,7 @@ function startRenamingList(list) {
               <button
                 type="button"
                 class="list-action-button"
-                :disabled="deletingListIds.has(list.id)"
+                :disabled="deletingListIds.has(list.id) || savingListId === list.id"
                 @click="startRenamingList(list)"
               >
                 Rename
@@ -240,7 +250,7 @@ function startRenamingList(list) {
               <button
                 type="button"
                 class="list-action-button list-delete-button"
-                :disabled="deletingListIds.has(list.id)"
+                :disabled="deletingListIds.has(list.id) || savingListId === list.id"
                 @click="emit('delete-list', list.id)"
               >
                 {{ deletingListIds.has(list.id) ? 'Deleting…' : 'Delete' }}

@@ -1,6 +1,8 @@
 package com.example.reminders.reminder;
 
 import com.example.reminders.reminder.dto.CreateReminderRequest;
+import com.example.reminders.reminder.dto.ReminderCountsResponse;
+import com.example.reminders.reminder.dto.ReminderPageResponse;
 import com.example.reminders.reminder.dto.ReminderResponse;
 import com.example.reminders.reminder.dto.UpdateCompletionRequest;
 import com.example.reminders.reminder.dto.UpdateReminderRequest;
@@ -39,6 +41,24 @@ public class ReminderController {
             @RequestParam(required = false) String today
     ) {
         return reminderService.findAll(query, scope, view, listId, today);
+    }
+
+    @GetMapping("/page")
+    public ReminderPageResponse findPage(
+            @RequestParam(name = "q", required = false) String query,
+            @RequestParam(required = false) String scope,
+            @RequestParam(required = false) String view,
+            @RequestParam(required = false) String listId,
+            @RequestParam(required = false) String today,
+            @RequestParam(required = false) String page,
+            @RequestParam(required = false) String size
+    ) {
+        return reminderService.findPage(query, scope, view, listId, today, page, size);
+    }
+
+    @GetMapping("/counts")
+    public ReminderCountsResponse findCounts(@RequestParam(required = false) String today) {
+        return reminderService.findCounts(today);
     }
 
     @PostMapping
