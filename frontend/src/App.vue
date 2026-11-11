@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import ReminderForm from './components/ReminderForm.vue'
 import ReminderList from './components/ReminderList.vue'
 import ReminderListSidebar from './components/ReminderListSidebar.vue'
+import { normalizeNotes, validateNotes } from './notes.js'
 
 const minimumDueDate = getTodayDate()
 const maximumDueDate = '9999-12-31'
@@ -30,12 +31,14 @@ const savingReminderIds = reactive(new Set())
 const deletingListIds = reactive(new Set())
 const form = reactive({
   title: '',
+  notes: '',
   dueDate: '',
   dueTime: '',
   priority: 'NONE'
 })
 const editForm = reactive({
   title: '',
+  notes: '',
   dueDate: '',
   dueTime: '',
   priority: 'NONE'
@@ -376,13 +379,13 @@ async function deleteList(listId) {
 
 async function createReminder() {
   submissionError.value = ''
-  const dueScheduleError = validateDueSchedule(form.dueDate, form.dueTime)
+  const validationError = validateDueSchedule(form.dueDate, form.dueTime) || validateNotes(form.notes)
   const listId = selectedView.value.type === 'list'
     ? selectedView.value.id
     : defaultListId.value
 
-  if (dueScheduleError) {
-    submissionError.value = dueScheduleError
+  if (validationError) {
+    submissionError.value = validationError
     return
   }
 
@@ -396,6 +399,7 @@ async function createReminder() {
       },
       body: JSON.stringify({
         title: form.title,
+        notes: normalizeNotes(form.notes),
         dueDate: form.dueDate || null,
         dueTime: form.dueTime || null,
         priority: form.priority,
@@ -411,6 +415,7 @@ async function createReminder() {
     reminders.value = [reminder, ...reminders.value]
     await refreshRemindersAfterMutation()
     form.title = ''
+    form.notes = ''
     form.dueDate = ''
     form.dueTime = ''
     form.priority = 'NONE'
@@ -487,6 +492,7 @@ async function deleteReminder(reminder) {
 function startEditing(reminder) {
   editingReminderId.value = reminder.id
   editForm.title = reminder.title
+  editForm.notes = reminder.notes ?? ''
   editForm.dueDate = reminder.dueDate || ''
   editForm.dueTime = toTimeInputValue(reminder.dueTime)
   editForm.priority = reminder.priority || 'NONE'
@@ -504,10 +510,10 @@ async function saveReminder(reminder) {
   }
 
   editError.value = ''
-  const dueScheduleError = validateDueSchedule(editForm.dueDate, editForm.dueTime)
+  const validationError = validateDueSchedule(editForm.dueDate, editForm.dueTime) || validateNotes(editForm.notes)
 
-  if (dueScheduleError) {
-    editError.value = dueScheduleError
+  if (validationError) {
+    editError.value = validationError
     return
   }
 
@@ -521,6 +527,7 @@ async function saveReminder(reminder) {
       },
       body: JSON.stringify({
         title: editForm.title,
+        notes: normalizeNotes(editForm.notes),
         dueDate: editForm.dueDate || null,
         dueTime: editForm.dueTime || null,
         priority: editForm.priority
@@ -584,6 +591,7 @@ async function saveReminder(reminder) {
 
       <ReminderForm
         :title="form.title"
+        :notes="form.notes"
         :due-date="form.dueDate"
         :due-time="form.dueTime"
         :priority="form.priority"
@@ -591,6 +599,7 @@ async function saveReminder(reminder) {
         :minimum-due-date="minimumDueDate"
         :maximum-due-date="maximumDueDate"
         @update:title="form.title = $event"
+        @update:notes="form.notes = $event"
         @update:due-date="form.dueDate = $event"
         @update:due-time="form.dueTime = $event"
         @update:priority="form.priority = $event"
@@ -615,6 +624,7 @@ async function saveReminder(reminder) {
         :deleting-reminder-ids="deletingReminderIds"
         :saving-reminder-ids="savingReminderIds"
         :edit-title="editForm.title"
+        :edit-notes="editForm.notes"
         :edit-due-date="editForm.dueDate"
         :edit-due-time="editForm.dueTime"
         :edit-priority="editForm.priority"
@@ -626,6 +636,7 @@ async function saveReminder(reminder) {
         @save-edit="saveReminder"
         @delete-reminder="deleteReminder"
         @update:edit-title="editForm.title = $event"
+        @update:edit-notes="editForm.notes = $event"
         @update:edit-due-date="editForm.dueDate = $event"
         @update:edit-due-time="editForm.dueTime = $event"
         @update:edit-priority="editForm.priority = $event"

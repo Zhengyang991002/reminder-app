@@ -16,6 +16,7 @@ public record ReminderResponse(
         @JsonFormat(pattern = "HH:mm")
         LocalTime dueTime,
         ReminderPriority priority,
-        Long listId
+        Long listId,
+        String notes
 ) {
 }

@@ -52,7 +52,8 @@ public class ReminderService {
                 request.dueDate(),
                 request.dueTime(),
                 defaultPriority(request.priority()),
-                reminderList
+                reminderList,
+                request.notes()
         );
         return toResponse(reminderRepository.save(reminder));
     }
@@ -76,7 +77,8 @@ public class ReminderService {
                 request.title().trim(),
                 request.dueDate(),
                 request.dueTime(),
-                defaultPriority(request.priority())
+                defaultPriority(request.priority()),
+                request.notes()
         );
         return toResponse(reminder);
     }
@@ -120,7 +122,8 @@ public class ReminderService {
                 reminder.getDueDate(),
                 reminder.getDueTime(),
                 reminder.getPriority(),
-                reminder.getList().getId()
+                reminder.getList().getId(),
+                reminder.getNotes()
         );
     }
 }

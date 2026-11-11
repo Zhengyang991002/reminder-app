@@ -27,6 +27,9 @@ public class Reminder {
     @Column(nullable = false, length = 255)
     private String title;
 
+    @Column(columnDefinition = "text")
+    private String notes;
+
     @Column(nullable = false)
     private boolean completed;
 
@@ -61,8 +64,21 @@ public class Reminder {
             ReminderPriority priority,
             ReminderList list
     ) {
+        this(title, dueDate, dueTime, priority, list, null);
+    }
+
+    public Reminder(
+            String title,
+            LocalDate dueDate,
+            LocalTime dueTime,
+            ReminderPriority priority,
+            ReminderList list,
+            String notes
+    ) {
         validateDueSchedule(dueDate, dueTime);
+        String normalizedNotes = requireNotes(notes);
         this.title = title;
+        this.notes = normalizedNotes;
         this.completed = false;
         this.createdAt = Instant.now();
         this.dueDate = dueDate;
@@ -77,6 +93,10 @@ public class Reminder {
 
     public String getTitle() {
         return title;
+    }
+
+    public String getNotes() {
+        return notes;
     }
 
     public boolean isCompleted() {
@@ -112,11 +132,24 @@ public class Reminder {
     }
 
     public void update(String title, LocalDate dueDate, LocalTime dueTime, ReminderPriority priority) {
+        update(title, dueDate, dueTime, priority, notes);
+    }
+
+    public void update(
+            String title,
+            LocalDate dueDate,
+            LocalTime dueTime,
+            ReminderPriority priority,
+            String notes
+    ) {
         validateDueSchedule(dueDate, dueTime);
+        ReminderPriority validatedPriority = requirePriority(priority);
+        String normalizedNotes = requireNotes(notes);
         this.title = title;
+        this.notes = normalizedNotes;
         this.dueDate = dueDate;
         this.dueTime = dueTime;
-        this.priority = requirePriority(priority);
+        this.priority = validatedPriority;
     }
 
     public void setCompleted(boolean completed) {
@@ -134,5 +167,13 @@ public class Reminder {
             throw new IllegalArgumentException("Priority must not be null");
         }
         return priority;
+    }
+
+    private String requireNotes(String notes) {
+        String normalized = ReminderNotes.normalize(notes);
+        if (normalized != null && normalized.length() > ReminderNotes.MAX_LENGTH) {
+            throw new IllegalArgumentException("Notes must be at most 2000 characters");
+        }
+        return normalized;
     }
 }

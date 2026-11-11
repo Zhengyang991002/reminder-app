@@ -1,7 +1,11 @@
 package com.example.reminders.reminder;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -33,6 +38,9 @@ class ReminderControllerIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Autowired
     private ReminderRepository reminderRepository;
@@ -88,11 +96,225 @@ class ReminderControllerIntegrationTest {
                         .content("{\"title\":\"No schedule\"}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.dueDate").isEmpty())
-                .andExpect(jsonPath("$.dueTime").isEmpty());
+                .andExpect(jsonPath("$.dueTime").isEmpty())
+                .andExpect(jsonPath("$.notes").hasJsonPath())
+                .andExpect(jsonPath("$.notes").value(nullValue()));
 
         Reminder createdReminder = reminderRepository.findAll().get(0);
         assertThat(createdReminder.getDueDate()).isNull();
         assertThat(createdReminder.getDueTime()).isNull();
+        assertThat(createdReminder.getNotes()).isNull();
+    }
+
+    @Test
+    void createsAndListsReminderWithNormalizedMultilineNotes() throws Exception {
+        String notes = "First line\n\n  Indented second line\tinside";
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes("\u2003 \n" + notes + "\n \u3000")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.notes").value(notes));
+
+        mockMvc.perform(get("/api/reminders"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].notes").value(notes));
+
+        assertThat(reminderRepository.findAll().get(0).getNotes()).isEqualTo(notes);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\t\n\r", "\u2003\u3000"})
+    void createsReminderWithNullNotesForEmptyContent(String notes) throws Exception {
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes(notes)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.notes").hasJsonPath())
+                .andExpect(jsonPath("$.notes").value(nullValue()));
+
+        assertThat(reminderRepository.findAll().get(0).getNotes()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"a", "\uD83D\uDE00"})
+    void acceptsExactly2000JavaStringCharactersInNotes(String character) throws Exception {
+        String notes = character.repeat(2000 / character.length());
+        assertThat(notes).hasSize(2000);
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes(notes)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.notes").value(notes));
+
+        assertThat(reminderRepository.findAll().get(0).getNotes()).isEqualTo(notes);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"a", "\uD83D\uDE00"})
+    void rejectsOversizedNormalizedNotesWhenCreating(String character) throws Exception {
+        String notes = character.repeat(2000 / character.length()) + "x";
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes(" \n" + notes + "\t ")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.notes").value("Notes must be at most 2000 characters"));
+
+        assertThat(reminderRepository.count()).isZero();
+    }
+
+    @Test
+    void acceptsRawNotesOver2000CharactersAfterNormalizationWhenCreating() throws Exception {
+        String notes = "n".repeat(2000);
+        String rawNotes = " \t\u2003" + notes + "\n\u3000 ";
+        assertThat(rawNotes.length()).isGreaterThan(2000);
+
+        mockMvc.perform(post("/api/reminders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes(rawNotes)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.notes").value(notes));
+
+        assertThat(reminderRepository.findAll().get(0).getNotes()).isEqualTo(notes);
+    }
+
+    @Test
+    void updatesNotesWhilePreservingOtherReminderState() throws Exception {
+        LocalDate dueDate = LocalDate.now().plusDays(1);
+        LocalTime dueTime = LocalTime.of(14, 30);
+        ReminderList list = reminderListRepository.save(new ReminderList("School"));
+        Reminder reminder = new Reminder(
+                "Notes reminder", dueDate, dueTime, ReminderPriority.HIGH, list, "Original notes"
+        );
+        reminder.setCompleted(true);
+        reminderRepository.save(reminder);
+        Instant createdAt = reminderRepository.findById(reminder.getId()).orElseThrow().getCreatedAt();
+        String notes = "Revised first line\n  Keep this indentation";
+        String request = objectMapper.writeValueAsString(objectMapper.createObjectNode()
+                .put("title", reminder.getTitle())
+                .put("dueDate", dueDate.toString())
+                .put("dueTime", "14:30")
+                .put("priority", "HIGH")
+                .put("notes", " \n" + notes + "\t "));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes").value(notes))
+                .andExpect(jsonPath("$.priority").value("HIGH"))
+                .andExpect(jsonPath("$.dueDate").value(dueDate.toString()))
+                .andExpect(jsonPath("$.dueTime").value("14:30"))
+                .andExpect(jsonPath("$.completed").value(true))
+                .andExpect(jsonPath("$.listId").value(list.getId()));
+
+        Reminder updatedReminder = reminderRepository.findById(reminder.getId()).orElseThrow();
+        assertThat(updatedReminder.getNotes()).isEqualTo(notes);
+        assertThat(updatedReminder.getPriority()).isEqualTo(ReminderPriority.HIGH);
+        assertThat(updatedReminder.getDueDate()).isEqualTo(dueDate);
+        assertThat(updatedReminder.getDueTime()).isEqualTo(dueTime);
+        assertThat(updatedReminder.isCompleted()).isTrue();
+        assertThat(updatedReminder.getList().getId()).isEqualTo(list.getId());
+        assertThat(updatedReminder.getCreatedAt()).isEqualTo(createdAt);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\t\n\r", "\u2003\u3000"})
+    void clearsNotesWithNullOrBlankInputWhenUpdating(String notes) throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Notes reminder", null, null, ReminderPriority.NONE, defaultReminderList, "Original notes"
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes(notes)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes").hasJsonPath())
+                .andExpect(jsonPath("$.notes").value(nullValue()));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getNotes()).isNull();
+    }
+
+    @Test
+    void clearsNotesWhenOmittedFromFullUpdate() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Notes reminder", null, null, ReminderPriority.NONE, defaultReminderList, "Original notes"
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Notes reminder\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes").hasJsonPath())
+                .andExpect(jsonPath("$.notes").value(nullValue()));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getNotes()).isNull();
+    }
+
+    @Test
+    void rejectsOversizedNotesWhenUpdatingWithoutChangingExistingReminder() throws Exception {
+        LocalDate dueDate = LocalDate.now().plusDays(1);
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Original title", dueDate, LocalTime.of(14, 30), ReminderPriority.HIGH,
+                defaultReminderList, "Original notes"
+        ));
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes(" \n" + "n".repeat(2001) + "\t ")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Request validation failed"))
+                .andExpect(jsonPath("$.errors.notes").value("Notes must be at most 2000 characters"));
+
+        Reminder unchangedReminder = reminderRepository.findById(reminder.getId()).orElseThrow();
+        assertThat(unchangedReminder.getTitle()).isEqualTo("Original title");
+        assertThat(unchangedReminder.getNotes()).isEqualTo("Original notes");
+        assertThat(unchangedReminder.getDueDate()).isEqualTo(dueDate);
+        assertThat(unchangedReminder.getDueTime()).isEqualTo(LocalTime.of(14, 30));
+        assertThat(unchangedReminder.getPriority()).isEqualTo(ReminderPriority.HIGH);
+    }
+
+    @Test
+    void acceptsRawNotesOver2000CharactersAfterNormalizationWhenUpdating() throws Exception {
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Notes reminder", null, null, ReminderPriority.NONE, defaultReminderList, "Original notes"
+        ));
+        String notes = "n".repeat(2000);
+
+        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reminderRequestWithNotes("\u2003 \n" + notes + "\t\u3000")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes").value(notes));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getNotes()).isEqualTo(notes);
+    }
+
+    @Test
+    void completionPatchPreservesNotesAndSchedule() throws Exception {
+        LocalDate dueDate = LocalDate.now().plusDays(1);
+        String notes = "First line\nSecond line";
+        Reminder reminder = reminderRepository.save(new Reminder(
+                "Notes reminder", dueDate, LocalTime.of(9, 0), ReminderPriority.MEDIUM,
+                defaultReminderList, notes
+        ));
+
+        mockMvc.perform(patch("/api/reminders/{id}/completion", reminder.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"completed\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.completed").value(true))
+                .andExpect(jsonPath("$.notes").value(notes))
+                .andExpect(jsonPath("$.priority").value("MEDIUM"))
+                .andExpect(jsonPath("$.dueDate").value(dueDate.toString()))
+                .andExpect(jsonPath("$.dueTime").value("09:00"));
+
+        assertThat(reminderRepository.findById(reminder.getId()).orElseThrow().getNotes()).isEqualTo(notes);
     }
 
     @Test
@@ -735,6 +957,12 @@ class ReminderControllerIntegrationTest {
         mockMvc.perform(delete("/api/reminders/{id}", 9999))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Reminder with id 9999 was not found"));
+    }
+
+    private String reminderRequestWithNotes(String notes) throws Exception {
+        return objectMapper.writeValueAsString(objectMapper.createObjectNode()
+                .put("title", "Notes reminder")
+                .put("notes", notes));
     }
 
     private void createReminderWithPriority(ReminderPriority priority) throws Exception {

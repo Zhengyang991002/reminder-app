@@ -1,5 +1,6 @@
 package com.example.reminders.reminder.dto;
 
+import com.example.reminders.reminder.ReminderNotes;
 import com.example.reminders.reminder.ReminderPriority;
 import com.example.reminders.reminder.validation.DueSchedule;
 import com.example.reminders.reminder.validation.SupportedDueDateYear;
@@ -22,6 +23,13 @@ public record UpdateReminderRequest(
         LocalDate dueDate,
         @JsonFormat(pattern = "HH:mm")
         LocalTime dueTime,
-        ReminderPriority priority
+        ReminderPriority priority,
+        @Size(max = ReminderNotes.MAX_LENGTH, message = "Notes must be at most 2000 characters")
+        String notes
 ) implements DueSchedule {
+
+    public UpdateReminderRequest {
+        // Normalize before Bean Validation checks the field's length.
+        notes = ReminderNotes.normalize(notes);
+    }
 }

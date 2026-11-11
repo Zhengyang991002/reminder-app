@@ -26,6 +26,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  editNotes: {
+    type: String,
+    required: true
+  },
   editDueDate: {
     type: String,
     required: true
@@ -55,6 +59,7 @@ const emit = defineEmits([
   'save-edit',
   'delete-reminder',
   'update:edit-title',
+  'update:edit-notes',
   'update:edit-due-date',
   'update:edit-due-time',
   'update:edit-priority',
@@ -85,6 +90,10 @@ function updateEditTitle(value) {
   emit('update:edit-title', value)
 }
 
+function updateEditNotes(value) {
+  emit('update:edit-notes', value)
+}
+
 function updateEditDueDate(value) {
   emit('update:edit-due-date', value)
 }
@@ -113,6 +122,7 @@ function validateEditDueSchedule(event) {
       :is-deleting="deletingReminderIds.has(reminder.id)"
       :is-saving="savingReminderIds.has(reminder.id)"
       :edit-title="editTitle"
+      :edit-notes="editNotes"
       :edit-due-date="editDueDate"
       :edit-due-time="editDueTime"
       :edit-priority="editPriority"
@@ -124,6 +134,7 @@ function validateEditDueSchedule(event) {
       @save-edit="saveReminder(reminder)"
       @delete-reminder="deleteReminder(reminder)"
       @update:edit-title="updateEditTitle"
+      @update:edit-notes="updateEditNotes"
       @update:edit-due-date="updateEditDueDate"
       @update:edit-due-time="updateEditDueTime"
       @update:edit-priority="updateEditPriority"

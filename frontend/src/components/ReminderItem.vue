@@ -1,4 +1,7 @@
 <script setup>
+import { computed } from 'vue'
+import { getNotesLength, MAX_NOTES_LENGTH, validateNotes } from '../notes.js'
+
 const props = defineProps({
   reminder: {
     type: Object,
@@ -21,6 +24,10 @@ const props = defineProps({
     required: true
   },
   editTitle: {
+    type: String,
+    required: true
+  },
+  editNotes: {
     type: String,
     required: true
   },
@@ -53,11 +60,15 @@ const emit = defineEmits([
   'save-edit',
   'delete-reminder',
   'update:edit-title',
+  'update:edit-notes',
   'update:edit-due-date',
   'update:edit-due-time',
   'update:edit-priority',
   'validate-edit-due-schedule'
 ])
+
+const notesLength = computed(() => getNotesLength(props.editNotes))
+const notesError = computed(() => validateNotes(props.editNotes))
 
 const dueDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: 'short',
@@ -78,6 +89,10 @@ const priorityLabels = {
 
 function updateEditTitle(event) {
   emit('update:edit-title', event.target.value.trim())
+}
+
+function updateEditNotes(event) {
+  emit('update:edit-notes', event.target.value)
 }
 
 function updateEditDueDate(event) {
@@ -134,6 +149,19 @@ function priorityLabel(priority) {
       </label>
 
       <label>
+        <span>Notes <small>(optional)</small></span>
+        <textarea
+          :value="editNotes"
+          rows="3"
+          :aria-invalid="Boolean(notesError)"
+          :aria-describedby="notesError ? `edit-notes-count-${reminder.id} edit-notes-error-${reminder.id}` : `edit-notes-count-${reminder.id}`"
+          @input="updateEditNotes"
+        ></textarea>
+        <small :id="`edit-notes-count-${reminder.id}`" class="notes-count">{{ notesLength }} / {{ MAX_NOTES_LENGTH }}</small>
+        <span v-if="notesError" :id="`edit-notes-error-${reminder.id}`" class="notes-error error" role="alert">{{ notesError }}</span>
+      </label>
+
+      <label>
         <span>Due date <small>(optional)</small></span>
         <input
           :value="editDueDate"
@@ -169,7 +197,7 @@ function priorityLabel(priority) {
       </label>
 
       <div class="edit-actions">
-        <button type="submit" :disabled="isSaving">
+        <button type="submit" :disabled="isSaving || Boolean(notesError)">
           {{ isSaving ? 'Saving...' : 'Save' }}
         </button>
         <button type="button" class="cancel-button" :disabled="isSaving" @click="emit('cancel-edit')">
@@ -179,18 +207,21 @@ function priorityLabel(priority) {
     </form>
 
     <template v-else>
-      <label class="reminder-title">
-        <input
-          type="checkbox"
-          :checked="reminder.completed"
-          :disabled="isUpdating"
-          @change="emit('completion-change', $event)"
-        />
-        <span :class="{ completed: reminder.completed }">{{ reminder.title }}</span>
-        <span v-if="priorityLabel(reminder.priority)" class="priority-indicator">
-          {{ priorityLabel(reminder.priority) }}
-        </span>
-      </label>
+      <div class="reminder-details">
+        <label class="reminder-title">
+          <input
+            type="checkbox"
+            :checked="reminder.completed"
+            :disabled="isUpdating"
+            @change="emit('completion-change', $event)"
+          />
+          <span :class="{ completed: reminder.completed }">{{ reminder.title }}</span>
+          <span v-if="priorityLabel(reminder.priority)" class="priority-indicator">
+            {{ priorityLabel(reminder.priority) }}
+          </span>
+        </label>
+        <p v-if="reminder.notes" class="reminder-notes-preview">{{ reminder.notes }}</p>
+      </div>
       <div class="reminder-actions">
         <time
           v-if="reminder.dueDate"
