@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -30,8 +31,14 @@ public class ReminderController {
     }
 
     @GetMapping
-    public List<ReminderResponse> findAll() {
-        return reminderService.findAll();
+    public List<ReminderResponse> findAll(
+            @RequestParam(name = "q", required = false) String query,
+            @RequestParam(required = false) String scope,
+            @RequestParam(required = false) String view,
+            @RequestParam(required = false) String listId,
+            @RequestParam(required = false) String today
+    ) {
+        return reminderService.findAll(query, scope, view, listId, today);
     }
 
     @PostMapping

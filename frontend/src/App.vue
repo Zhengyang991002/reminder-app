@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ReminderForm from './components/ReminderForm.vue'
 import ReminderList from './components/ReminderList.vue'
 import ReminderListSidebar from './components/ReminderListSidebar.vue'
@@ -8,10 +8,20 @@ import { normalizeNotes, validateNotes } from './notes.js'
 const minimumDueDate = getTodayDate()
 const maximumDueDate = '9999-12-31'
 const reminders = ref([])
+let remindersRequestId = 0
 const lists = ref([])
+let listsRequestId = 0
 const selectedView = ref({ type: 'list', id: null })
 const loading = ref(true)
 const error = ref('')
+const searchQuery = ref('')
+const searchMode = ref('global')
+const searchInput = ref(null)
+const searchResults = ref([])
+const searchLoading = ref(false)
+const searchError = ref('')
+let searchTimer = null
+let searchRequest = null
 const submitting = ref(false)
 const submissionError = ref('')
 const completionError = ref('')
@@ -101,6 +111,54 @@ const filteredReminders = computed(() => {
 
   return reminders.value.filter((reminder) => reminder.listId === selectedView.value.id)
 })
+const searchUrl = computed(getSearchUrl)
+const displayHeading = computed(() => {
+  if (searchUrl.value && searchMode.value === 'global') {
+    return 'Search all reminders'
+  }
+
+  return heading.value
+})
+const displayedReminders = computed(() => searchUrl.value ? searchResults.value : filteredReminders.value)
+
+watch(searchUrl, (url) => {
+  cancelPendingSearch()
+  searchResults.value = []
+  searchError.value = ''
+  searchLoading.value = Boolean(url)
+
+  if (url) {
+    searchTimer = setTimeout(loadSearchResults, 300)
+  }
+}, { flush: 'sync' })
+
+onBeforeUnmount(cancelPendingSearch)
+
+function getSearchUrl() {
+  const query = normalizeNotes(searchQuery.value)
+  if (query === null) {
+    return null
+  }
+
+  const params = new URLSearchParams({ q: query, scope: searchMode.value })
+  if (searchMode.value === 'view') {
+    const view = selectedView.value
+    if (view.type === 'list') {
+      if (view.id === null) {
+        return null
+      }
+      params.set('view', 'list')
+      params.set('listId', view.id)
+    } else {
+      params.set('view', view.key)
+      if (view.key === 'today') {
+        params.set('today', getTodayDate())
+      }
+    }
+  }
+
+  return `/api/reminders?${params}`
+}
 
 function getTodayDate() {
   const today = new Date()
@@ -108,6 +166,58 @@ function getTodayDate() {
   const day = String(today.getDate()).padStart(2, '0')
 
   return `${today.getFullYear()}-${month}-${day}`
+}
+
+function clearSearch() {
+  searchQuery.value = ''
+  searchInput.value?.focus()
+}
+
+function cancelPendingSearch() {
+  clearTimeout(searchTimer)
+  searchTimer = null
+  searchRequest?.abort()
+  searchRequest = null
+}
+
+async function loadSearchResults() {
+  const url = getSearchUrl()
+  if (!url) {
+    return
+  }
+
+  cancelPendingSearch()
+  const request = new AbortController()
+  searchRequest = request
+  searchLoading.value = true
+  searchError.value = ''
+  let failureMessage = 'Unable to search reminders.'
+
+  try {
+    const response = await fetch(url, { signal: request.signal })
+    if (!response.ok) {
+      const problem = await response.json().catch(() => null)
+      if (problem?.detail) {
+        failureMessage = problem.detail
+      }
+      throw new Error(`Request failed with status ${response.status}`)
+    }
+
+    const results = await response.json()
+    if (request === searchRequest) {
+      searchResults.value = results
+    }
+  } catch {
+    if (request === searchRequest) {
+      searchResults.value = []
+      searchError.value = failureMessage
+    }
+  } finally {
+    if (request === searchRequest) {
+      searchRequest = null
+      searchLoading.value = false
+    }
+  }
 }
 
 function toTimeInputValue(dueTime) {
@@ -177,31 +287,41 @@ function validateListName(name) {
 }
 
 async function loadReminders() {
+  const requestId = ++remindersRequestId
   const response = await fetch('/api/reminders')
 
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`)
   }
 
-  reminders.value = await response.json()
+  const results = await response.json()
+  if (requestId === remindersRequestId) {
+    reminders.value = results
+  }
 }
 
 async function refreshRemindersAfterMutation() {
+  const searchRefresh = loadSearchResults()
   try {
     await loadReminders()
   } catch {
     // Keep the successful local mutation if the follow-up read fails.
   }
+  await searchRefresh
 }
 
 async function loadLists() {
+  const requestId = ++listsRequestId
   const response = await fetch('/api/lists')
 
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`)
   }
 
-  lists.value = await response.json()
+  const results = await response.json()
+  if (requestId === listsRequestId) {
+    lists.value = results
+  }
 }
 
 function selectDefaultList() {
@@ -274,6 +394,7 @@ async function createList() {
     }
 
     const createdList = await response.json()
+    listsRequestId += 1
     lists.value = [...lists.value, createdList]
     selectedView.value = { type: 'list', id: createdList.id }
     showingNewListForm.value = false
@@ -329,6 +450,7 @@ async function renameList(list) {
     }
 
     const updatedList = await response.json()
+    listsRequestId += 1
     const listIndex = lists.value.findIndex(({ id }) => id === updatedList.id)
 
     if (listIndex !== -1) {
@@ -350,8 +472,6 @@ async function deleteList(listId) {
   }
 
   listError.value = ''
-  const deletedSelectedList =
-    selectedView.value.type === 'list' && selectedView.value.id === listId
   deletingListIds.add(listId)
 
   try {
@@ -363,12 +483,16 @@ async function deleteList(listId) {
       throw new Error(`Request failed with status ${response.status}`)
     }
 
-    await Promise.all([loadLists(), loadReminders()])
-
-    if (deletedSelectedList) {
-      selectedView.value = { type: 'list', id: null }
+    lists.value = lists.value.filter(({ id }) => id !== listId)
+    if (selectedView.value.type === 'list' && selectedView.value.id === listId) {
       editingReminderId.value = null
       selectDefaultList()
+    }
+
+    try {
+      await Promise.all([loadLists(), loadReminders(), loadSearchResults()])
+    } catch {
+      listError.value = 'List deleted, but unable to refresh reminders and lists.'
     }
   } catch {
     listError.value = 'Unable to delete reminder list.'
@@ -482,6 +606,8 @@ async function deleteReminder(reminder) {
     }
 
     reminders.value = reminders.value.filter(({ id }) => id !== reminder.id)
+    searchResults.value = searchResults.value.filter(({ id }) => id !== reminder.id)
+    await refreshRemindersAfterMutation()
   } catch {
     deleteError.value = 'Unable to delete reminder.'
   } finally {
@@ -587,7 +713,7 @@ async function saveReminder(reminder) {
     />
 
     <section class="reminder-content">
-      <h1>{{ heading }}</h1>
+      <h1>{{ displayHeading }}</h1>
 
       <ReminderForm
         :title="form.title"
@@ -612,13 +738,38 @@ async function saveReminder(reminder) {
       <p v-if="deleteError" class="error" role="alert">{{ deleteError }}</p>
       <p v-if="editError" class="error" role="alert">{{ editError }}</p>
 
-      <p v-if="loading">Loading reminders and lists...</p>
-      <p v-else-if="error" class="error" role="alert">{{ error }}</p>
-      <p v-else-if="filteredReminders.length === 0">No reminders yet.</p>
+      <div class="reminder-search" role="search" aria-label="Reminders">
+        <label class="visually-hidden" for="search-query">Search reminders</label>
+        <input
+          id="search-query"
+          ref="searchInput"
+          v-model="searchQuery"
+          type="text"
+          placeholder="Search titles and notes"
+          :disabled="loading"
+          @keydown.esc="clearSearch"
+        >
+        <label class="visually-hidden" for="search-mode">Search scope</label>
+        <select id="search-mode" v-model="searchMode" :disabled="loading">
+          <option value="global">All reminders</option>
+          <option value="view">Current view</option>
+        </select>
+        <button v-if="searchQuery" class="cancel-button" type="button" @click="clearSearch">
+          Clear search
+        </button>
+      </div>
+
+      <p v-if="searchUrl && searchLoading" role="status">Searching reminders...</p>
+      <p v-else-if="searchUrl && searchError" class="error" role="alert">{{ searchError }}</p>
+      <p v-else-if="!searchUrl && loading">Loading reminders and lists...</p>
+      <p v-else-if="!searchUrl && error" class="error" role="alert">{{ error }}</p>
+      <p v-else-if="displayedReminders.length === 0" role="status">
+        {{ searchUrl ? 'No reminders match your search.' : 'No reminders yet.' }}
+      </p>
 
       <ReminderList
         v-else
-        :reminders="filteredReminders"
+        :reminders="displayedReminders"
         :editing-reminder-id="editingReminderId"
         :updating-reminder-ids="updatingReminderIds"
         :deleting-reminder-ids="deletingReminderIds"
