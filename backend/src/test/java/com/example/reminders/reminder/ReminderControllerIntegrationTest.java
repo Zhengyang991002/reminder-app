@@ -1,5 +1,8 @@
 package com.example.reminders.reminder;
 
+import com.example.reminders.auth.AppUser;
+import com.example.reminders.auth.AuthenticatedTestSession;
+import com.example.reminders.auth.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,6 +15,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
@@ -48,13 +53,26 @@ class ReminderControllerIntegrationTest {
     @Autowired
     private ReminderListRepository reminderListRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    private AuthenticatedTestSession session;
+    private AppUser owner;
+
     private ReminderList defaultReminderList;
 
     @BeforeEach
-    void clearReminders() {
-        reminderRepository.deleteAll();
-        reminderListRepository.deleteAll();
-        defaultReminderList = reminderListRepository.save(new ReminderList("Reminders"));
+    void clearReminders() throws Exception {
+        reminderRepository.deleteAllInBatch();
+        reminderListRepository.deleteAllInBatch();
+        userRepository.deleteAllInBatch();
+        session = AuthenticatedTestSession.registerAndLogin(mockMvc, objectMapper, "regression@example.com");
+        owner = userRepository.findById(session.userId()).orElseThrow();
+        defaultReminderList = reminderListRepository.findByUser_IdAndDefaultListTrue(session.userId()).orElseThrow();
+    }
+
+    private ResultActions perform(MockHttpServletRequestBuilder request) throws Exception {
+        return session.perform(mockMvc, request);
     }
 
     @Test
@@ -67,7 +85,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(dueDate);
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated())
@@ -79,7 +97,7 @@ class ReminderControllerIntegrationTest {
                 .andExpect(jsonPath("$.dueTime").isEmpty())
                 .andExpect(jsonPath("$.listId").value(defaultReminderList.getId()));
 
-        mockMvc.perform(get("/api/reminders"))
+        perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].title").value("Buy groceries"))
@@ -91,7 +109,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void createsReminderWithoutDueDateOrDueTime() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"No schedule\"}"))
                 .andExpect(status().isCreated())
@@ -110,13 +128,13 @@ class ReminderControllerIntegrationTest {
     void createsAndListsReminderWithNormalizedMultilineNotes() throws Exception {
         String notes = "First line\n\n  Indented second line\tinside";
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes("\u2003 \n" + notes + "\n \u3000")))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.notes").value(notes));
 
-        mockMvc.perform(get("/api/reminders"))
+        perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].notes").value(notes));
 
@@ -127,7 +145,7 @@ class ReminderControllerIntegrationTest {
     @NullAndEmptySource
     @ValueSource(strings = {"   ", "\t\n\r", "\u2003\u3000"})
     void createsReminderWithNullNotesForEmptyContent(String notes) throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes(notes)))
                 .andExpect(status().isCreated())
@@ -143,7 +161,7 @@ class ReminderControllerIntegrationTest {
         String notes = character.repeat(2000 / character.length());
         assertThat(notes).hasSize(2000);
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes(notes)))
                 .andExpect(status().isCreated())
@@ -157,7 +175,7 @@ class ReminderControllerIntegrationTest {
     void rejectsOversizedNormalizedNotesWhenCreating(String character) throws Exception {
         String notes = character.repeat(2000 / character.length()) + "x";
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes(" \n" + notes + "\t ")))
                 .andExpect(status().isBadRequest())
@@ -173,7 +191,7 @@ class ReminderControllerIntegrationTest {
         String rawNotes = " \t\u2003" + notes + "\n\u3000 ";
         assertThat(rawNotes.length()).isGreaterThan(2000);
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes(rawNotes)))
                 .andExpect(status().isCreated())
@@ -186,7 +204,7 @@ class ReminderControllerIntegrationTest {
     void updatesNotesWhilePreservingOtherReminderState() throws Exception {
         LocalDate dueDate = LocalDate.now().plusDays(1);
         LocalTime dueTime = LocalTime.of(14, 30);
-        ReminderList list = reminderListRepository.save(new ReminderList("School"));
+        ReminderList list = reminderListRepository.save(new ReminderList("School", owner));
         Reminder reminder = new Reminder(
                 "Notes reminder", dueDate, dueTime, ReminderPriority.HIGH, list, "Original notes"
         );
@@ -201,7 +219,7 @@ class ReminderControllerIntegrationTest {
                 .put("priority", "HIGH")
                 .put("notes", " \n" + notes + "\t "));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isOk())
@@ -230,7 +248,7 @@ class ReminderControllerIntegrationTest {
                 "Notes reminder", null, null, ReminderPriority.NONE, defaultReminderList, "Original notes"
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes(notes)))
                 .andExpect(status().isOk())
@@ -246,7 +264,7 @@ class ReminderControllerIntegrationTest {
                 "Notes reminder", null, null, ReminderPriority.NONE, defaultReminderList, "Original notes"
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Notes reminder\"}"))
                 .andExpect(status().isOk())
@@ -264,7 +282,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList, "Original notes"
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes(" \n" + "n".repeat(2001) + "\t ")))
                 .andExpect(status().isBadRequest())
@@ -286,7 +304,7 @@ class ReminderControllerIntegrationTest {
         ));
         String notes = "n".repeat(2000);
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reminderRequestWithNotes("\u2003 \n" + notes + "\t\u3000")))
                 .andExpect(status().isOk())
@@ -304,7 +322,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList, notes
         ));
 
-        mockMvc.perform(patch("/api/reminders/{id}/completion", reminder.getId())
+        perform(patch("/api/reminders/{id}/completion", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"completed\":true}"))
                 .andExpect(status().isOk())
@@ -319,7 +337,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void defaultsOmittedPriorityToNoneWhenCreating() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"No priority\"}"))
                 .andExpect(status().isCreated())
@@ -331,7 +349,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void createsReminderWithExplicitNonePriority() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"No priority\",\"priority\":\"NONE\"}"))
                 .andExpect(status().isCreated())
@@ -358,7 +376,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsInvalidPriorityWhenCreating() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Invalid priority\",\"priority\":\"URGENT\"}"))
                 .andExpect(status().isBadRequest());
@@ -377,7 +395,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(dueDate);
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated())
@@ -390,7 +408,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsDueTimeWithoutDueDateWhenCreating() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Call dentist\",\"dueDate\":null,\"dueTime\":\"14:30\"}"))
                 .andExpect(status().isBadRequest())
@@ -400,9 +418,9 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void listsReminderLists() throws Exception {
-        reminderListRepository.save(new ReminderList("School"));
+        reminderListRepository.save(new ReminderList("School", owner));
 
-        mockMvc.perform(get("/api/lists"))
+        perform(get("/api/lists"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(2)))
                 .andExpect(jsonPath("$[*].name", hasItems("Reminders", "School")));
@@ -410,7 +428,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void createsAReminderList() throws Exception {
-        mockMvc.perform(post("/api/lists")
+        perform(post("/api/lists")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"  School  \"}"))
                 .andExpect(status().isCreated())
@@ -423,12 +441,12 @@ class ReminderControllerIntegrationTest {
     void allowsDuplicateReminderListNames() throws Exception {
         String request = "{\"name\":\"School\"}";
 
-        mockMvc.perform(post("/api/lists")
+        perform(post("/api/lists")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated());
 
-        mockMvc.perform(post("/api/lists")
+        perform(post("/api/lists")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated());
@@ -440,7 +458,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsBlankReminderListName() throws Exception {
-        mockMvc.perform(post("/api/lists")
+        perform(post("/api/lists")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"   \"}"))
                 .andExpect(status().isBadRequest())
@@ -452,7 +470,7 @@ class ReminderControllerIntegrationTest {
     void rejectsReminderListNameLongerThan100Characters() throws Exception {
         String name = "a".repeat(101);
 
-        mockMvc.perform(post("/api/lists")
+        perform(post("/api/lists")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"" + name + "\"}"))
                 .andExpect(status().isBadRequest())
@@ -462,9 +480,9 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void renamesAReminderList() throws Exception {
-        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School", owner));
 
-        mockMvc.perform(put("/api/lists/{id}", reminderList.getId())
+        perform(put("/api/lists/{id}", reminderList.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"  CS5010  \"}"))
                 .andExpect(status().isOk())
@@ -477,7 +495,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void returnsNotFoundWhenRenamingAMissingReminderList() throws Exception {
-        mockMvc.perform(put("/api/lists/{id}", 9999)
+        perform(put("/api/lists/{id}", 9999)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"CS5010\"}"))
                 .andExpect(status().isNotFound())
@@ -486,9 +504,9 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void deletesANormalReminderList() throws Exception {
-        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School", owner));
 
-        mockMvc.perform(delete("/api/lists/{id}", reminderList.getId()))
+        perform(delete("/api/lists/{id}", reminderList.getId()))
                 .andExpect(status().isNoContent());
 
         assertThat(reminderListRepository.existsById(reminderList.getId())).isFalse();
@@ -496,10 +514,10 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void movesRemindersToTheDefaultListBeforeDeletingAReminderList() throws Exception {
-        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School", owner));
         Reminder reminder = reminderRepository.save(new Reminder("Study", null, null, reminderList));
 
-        mockMvc.perform(delete("/api/lists/{id}", reminderList.getId()))
+        perform(delete("/api/lists/{id}", reminderList.getId()))
                 .andExpect(status().isNoContent());
 
         Reminder movedReminder = reminderRepository.findById(reminder.getId()).orElseThrow();
@@ -509,7 +527,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void rejectsDeletingTheDefaultReminderList() throws Exception {
-        mockMvc.perform(delete("/api/lists/{id}", defaultReminderList.getId()))
+        perform(delete("/api/lists/{id}", defaultReminderList.getId()))
                 .andExpect(status().isBadRequest());
 
         assertThat(reminderListRepository.existsById(defaultReminderList.getId())).isTrue();
@@ -517,14 +535,14 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void returnsNotFoundWhenDeletingAMissingReminderList() throws Exception {
-        mockMvc.perform(delete("/api/lists/{id}", 9999))
+        perform(delete("/api/lists/{id}", 9999))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Reminder list with id 9999 was not found"));
     }
 
     @Test
     void createsAReminderInTheSpecifiedList() throws Exception {
-        ReminderList reminderList = reminderListRepository.save(new ReminderList("School"));
+        ReminderList reminderList = reminderListRepository.save(new ReminderList("School", owner));
         String request = """
                 {
                   "title": "Study",
@@ -533,7 +551,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(reminderList.getId());
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated())
@@ -546,7 +564,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void returnsNotFoundWhenCreatingAReminderWithAMissingList() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Study\",\"dueDate\":null,\"listId\":9999}"))
                 .andExpect(status().isNotFound())
@@ -566,7 +584,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(dueDate);
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isOk())
@@ -585,7 +603,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Updated title\",\"dueDate\":null,\"priority\":\"HIGH\"}"))
                 .andExpect(status().isOk())
@@ -605,7 +623,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Updated title\",\"dueDate\":null,\"priority\":\"LOW\"}"))
                 .andExpect(status().isOk())
@@ -625,7 +643,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Updated title\",\"dueDate\":null}"))
                 .andExpect(status().isOk())
@@ -645,7 +663,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Updated title\",\"dueDate\":null,\"priority\":null}"))
                 .andExpect(status().isOk())
@@ -672,7 +690,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(dueDate);
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isOk())
@@ -692,7 +710,7 @@ class ReminderControllerIntegrationTest {
                 defaultReminderList
         ));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Updated title\",\"dueDate\":null,\"dueTime\":\"16:45\"}"))
                 .andExpect(status().isBadRequest())
@@ -710,7 +728,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(today);
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated())
@@ -726,7 +744,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(LocalDate.now().minusDays(1));
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isBadRequest())
@@ -744,7 +762,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """.formatted(LocalDate.now().minusDays(1));
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isBadRequest())
@@ -761,7 +779,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """;
 
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isBadRequest())
@@ -779,7 +797,7 @@ class ReminderControllerIntegrationTest {
                 }
                 """;
 
-        mockMvc.perform(put("/api/reminders/{id}", reminder.getId())
+        perform(put("/api/reminders/{id}", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isBadRequest())
@@ -900,7 +918,7 @@ class ReminderControllerIntegrationTest {
                 Instant.parse("2026-01-01T08:10:00Z")
         );
 
-        mockMvc.perform(get("/api/reminders"))
+        perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", contains(
                         "earlier date low priority",
@@ -923,7 +941,7 @@ class ReminderControllerIntegrationTest {
     void marksAReminderAsCompleted() throws Exception {
         Reminder reminder = reminderRepository.save(new Reminder("Finish report", null, null, defaultReminderList));
 
-        mockMvc.perform(patch("/api/reminders/{id}/completion", reminder.getId())
+        perform(patch("/api/reminders/{id}/completion", reminder.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"completed\":true}"))
                 .andExpect(status().isOk())
@@ -934,17 +952,17 @@ class ReminderControllerIntegrationTest {
     void deletesAReminder() throws Exception {
         Reminder reminder = reminderRepository.save(new Reminder("Remove me", null, null, defaultReminderList));
 
-        mockMvc.perform(delete("/api/reminders/{id}", reminder.getId()))
+        perform(delete("/api/reminders/{id}", reminder.getId()))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/api/reminders"))
+        perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(0)));
     }
 
     @Test
     void rejectsAnInvalidReminder() throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"   \",\"dueDate\":null}"))
                 .andExpect(status().isBadRequest())
@@ -954,7 +972,7 @@ class ReminderControllerIntegrationTest {
 
     @Test
     void returnsNotFoundForUnknownReminder() throws Exception {
-        mockMvc.perform(delete("/api/reminders/{id}", 9999))
+        perform(delete("/api/reminders/{id}", 9999))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("Reminder with id 9999 was not found"));
     }
@@ -966,7 +984,7 @@ class ReminderControllerIntegrationTest {
     }
 
     private void createReminderWithPriority(ReminderPriority priority) throws Exception {
-        mockMvc.perform(post("/api/reminders")
+        perform(post("/api/reminders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Priority reminder\",\"priority\":\"" + priority + "\"}"))
                 .andExpect(status().isCreated())

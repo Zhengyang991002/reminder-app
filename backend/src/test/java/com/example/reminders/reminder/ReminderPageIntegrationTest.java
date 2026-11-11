@@ -1,5 +1,8 @@
 package com.example.reminders.reminder;
 
+import com.example.reminders.auth.AppUser;
+import com.example.reminders.auth.AuthenticatedTestSession;
+import com.example.reminders.auth.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hibernate.resource.jdbc.spi.StatementInspector;
@@ -19,6 +22,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.time.Instant;
@@ -59,25 +63,38 @@ class ReminderPageIntegrationTest {
     private ReminderListRepository reminderListRepository;
 
     @Autowired
+    private UserRepository userRepository;
+
+    private AuthenticatedTestSession session;
+    private AppUser owner;
+
+    @Autowired
     private SqlCapture sqlCapture;
 
     private ReminderList defaultList;
     private ReminderList otherList;
 
     @BeforeEach
-    void resetRemindersAndLists() {
-        reminderRepository.deleteAll();
-        reminderListRepository.deleteAll();
-        defaultList = reminderListRepository.save(new ReminderList("Reminders"));
-        otherList = reminderListRepository.save(new ReminderList("Work"));
+    void resetRemindersAndLists() throws Exception {
+        reminderRepository.deleteAllInBatch();
+        reminderListRepository.deleteAllInBatch();
+        userRepository.deleteAllInBatch();
+        session = AuthenticatedTestSession.registerAndLogin(mockMvc, objectMapper, "regression@example.com");
+        owner = userRepository.findById(session.userId()).orElseThrow();
+        defaultList = reminderListRepository.findByUser_IdAndDefaultListTrue(session.userId()).orElseThrow();
+        otherList = reminderListRepository.save(new ReminderList("Work", owner));
         sqlCapture.clear();
+    }
+
+    private ResultActions perform(MockHttpServletRequestBuilder request) throws Exception {
+        return session.perform(mockMvc, request);
     }
 
     @Test
     void defaultsToFirstPageOfTwentyWithoutChangingTheExistingArrayEndpoint() throws Exception {
         saveReminders(25);
 
-        mockMvc.perform(get(PAGE_URL))
+        perform(get(PAGE_URL))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(20)))
                 .andExpect(jsonPath("$.page").value(0))
@@ -87,7 +104,7 @@ class ReminderPageIntegrationTest {
                 .andExpect(jsonPath("$.first").value(true))
                 .andExpect(jsonPath("$.last").value(false));
 
-        mockMvc.perform(get("/api/reminders"))
+        perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(25)));
     }
@@ -96,7 +113,7 @@ class ReminderPageIntegrationTest {
     void returnsCustomMiddleAndPartialLastPagesWithAccurateMetadata() throws Exception {
         saveReminders(5);
 
-        mockMvc.perform(get(PAGE_URL).param("page", "1").param("size", "2"))
+        perform(get(PAGE_URL).param("page", "1").param("size", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(2)))
                 .andExpect(jsonPath("$.content[0].title").value("Reminder 2"))
@@ -108,7 +125,7 @@ class ReminderPageIntegrationTest {
                 .andExpect(jsonPath("$.first").value(false))
                 .andExpect(jsonPath("$.last").value(false));
 
-        mockMvc.perform(get(PAGE_URL).param("page", "2").param("size", "2"))
+        perform(get(PAGE_URL).param("page", "2").param("size", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(1)))
                 .andExpect(jsonPath("$.content[0].title").value("Reminder 0"))
@@ -123,7 +140,7 @@ class ReminderPageIntegrationTest {
     void acceptsMaximumSizeAndMarksASinglePageAsFirstAndLast() throws Exception {
         saveReminders(1);
 
-        mockMvc.perform(get(PAGE_URL).param("size", "100"))
+        perform(get(PAGE_URL).param("size", "100"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(1)))
                 .andExpect(jsonPath("$.size").value(100))
@@ -136,7 +153,7 @@ class ReminderPageIntegrationTest {
     void returnsAnEmptyPageForNoMatches() throws Exception {
         saveReminders(3);
 
-        mockMvc.perform(get(PAGE_URL).param("q", "nothing matches"))
+        perform(get(PAGE_URL).param("q", "nothing matches"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(0)))
                 .andExpect(jsonPath("$.page").value(0))
@@ -152,7 +169,7 @@ class ReminderPageIntegrationTest {
     void returnsActualTotalsForAPageBeyondTheLastPage(int page, int size, int totalPages) throws Exception {
         saveReminders(5);
 
-        mockMvc.perform(get(PAGE_URL).param("page", Integer.toString(page)).param("size", Integer.toString(size)))
+        perform(get(PAGE_URL).param("page", Integer.toString(page)).param("size", Integer.toString(size)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(0)))
                 .andExpect(jsonPath("$.page").value(page))
@@ -236,7 +253,7 @@ class ReminderPageIntegrationTest {
     void keepsTheViewFilterForBlankQueries(String query) throws Exception {
         saveViewFixtures();
 
-        mockMvc.perform(get(PAGE_URL).param("q", query)
+        perform(get(PAGE_URL).param("q", query)
                         .param("scope", "view").param("view", "list")
                         .param("listId", defaultList.getId().toString()).param("size", "1"))
                 .andExpect(status().isOk())
@@ -272,7 +289,7 @@ class ReminderPageIntegrationTest {
         String query = character.repeat(200 / character.length());
         saveReminder("Matching note", "Start " + query + " end", null, defaultList);
 
-        mockMvc.perform(get(PAGE_URL).param("q", "\u2003\t" + query + "\n "))
+        perform(get(PAGE_URL).param("q", "\u2003\t" + query + "\n "))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1));
 
@@ -327,7 +344,7 @@ class ReminderPageIntegrationTest {
 
     @Test
     void returnsNotFoundForAMissingListEvenWithoutMatches() throws Exception {
-        mockMvc.perform(get(PAGE_URL).param("q", "spring").param("scope", "view")
+        perform(get(PAGE_URL).param("q", "spring").param("scope", "view")
                         .param("view", "list").param("listId", Long.toString(Long.MAX_VALUE)))
                 .andExpect(status().isNotFound())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
@@ -340,7 +357,7 @@ class ReminderPageIntegrationTest {
         Reminder reminder = reminderRepository.save(new Reminder("Review framework", BROWSER_TODAY,
                 LocalTime.of(9, 30), ReminderPriority.HIGH, otherList, "Read Spring notes"));
 
-        mockMvc.perform(get(PAGE_URL).param("q", "spring"))
+        perform(get(PAGE_URL).param("q", "spring"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value(reminder.getId()))
                 .andExpect(jsonPath("$.content[0].title").value("Review framework"))
@@ -416,12 +433,12 @@ class ReminderPageIntegrationTest {
     @Test
     void sendsOrderingAndPaginationToTheDatabaseAndFetchesListsWithoutNPlusOne() throws Exception {
         for (int index = 0; index < 7; index++) {
-            ReminderList list = reminderListRepository.save(new ReminderList("Distinct list " + index));
+            ReminderList list = reminderListRepository.save(new ReminderList("Distinct list " + index, owner));
             saveReminder("SQL fixture " + index, null, null, list);
         }
         sqlCapture.clear();
 
-        mockMvc.perform(get(PAGE_URL).param("q", "SQL fixture").param("page", "1").param("size", "3"))
+        perform(get(PAGE_URL).param("q", "SQL fixture").param("page", "1").param("size", "3"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(3)))
                 .andExpect(jsonPath("$.totalElements").value(7));
@@ -435,11 +452,13 @@ class ReminderPageIntegrationTest {
         String countSql = selects.stream().filter(sql -> sql.startsWith("select count(")).findFirst().orElseThrow();
         String contentSql = selects.stream().filter(sql -> !sql.startsWith("select count(")).findFirst().orElseThrow();
         assertThat(contentSql).contains(" join reminder_lists ", " order by ", "case when", " offset ", " fetch first ");
-        assertThat(countSql).doesNotContain(" join ", " order by ", " offset ", " fetch first ");
+        assertThat(countSql)
+                .contains(" join reminder_lists ", ".user_id")
+                .doesNotContain(" order by ", " offset ", " fetch first ");
     }
 
     private JsonNode readPage(MockHttpServletRequestBuilder request) throws Exception {
-        String json = mockMvc.perform(request)
+        String json = perform(request)
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andReturn().getResponse().getContentAsString();
@@ -447,7 +466,7 @@ class ReminderPageIntegrationTest {
     }
 
     private void assertBadRequest(MockHttpServletRequestBuilder request) throws Exception {
-        mockMvc.perform(request)
+        perform(request)
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.status").value(400))

@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 
 class ReminderTest {
 
-    private final ReminderList reminderList = new ReminderList("Reminders");
+    private final ReminderList reminderList = new ReminderList();
 
     @Test
     void rejectsDueTimeWithoutDueDateWhenConstructing() {

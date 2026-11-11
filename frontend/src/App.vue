@@ -4,6 +4,24 @@ import ReminderForm from './components/ReminderForm.vue'
 import ReminderList from './components/ReminderList.vue'
 import ReminderListSidebar from './components/ReminderListSidebar.vue'
 import { normalizeNotes, validateNotes } from './notes.js'
+import { apiErrorMessage } from './sessionApi.js'
+
+const props = defineProps({
+  session: {
+    type: Object,
+    required: true
+  }
+})
+const session = props.session
+let disposed = false
+
+function isCurrent() {
+  return !disposed && session.isCurrent()
+}
+
+function request(path, options) {
+  return session.request(path, { ...options, requiresAuth: true })
+}
 
 const minimumDueDate = getTodayDate()
 const maximumDueDate = '9999-12-31'
@@ -63,14 +81,7 @@ const selectedList = computed(() => {
 
   return lists.value.find(({ id }) => id === selectedView.value.id) ?? null
 })
-const defaultListId = computed(() => {
-  const defaultLists = lists.value.filter((list) => list.name === 'Reminders')
-
-  return defaultLists.reduce(
-    (lowestId, list) => (lowestId === null || list.id < lowestId ? list.id : lowestId),
-    null
-  )
-})
+const defaultListId = computed(() => lists.value.find((list) => list.isDefault)?.id ?? null)
 const smartLists = computed(() => [
   { key: 'today', name: 'Today', count: viewCounts.value?.today ?? '—' },
   { key: 'scheduled', name: 'Scheduled', count: viewCounts.value?.scheduled ?? '—' },
@@ -97,6 +108,10 @@ const displayHeading = computed(() => {
 const displayedReminders = computed(() => pageResult.value?.content ?? [])
 
 watch([selectedViewKey, searchTerm, searchMode], ([, term], [, previousTerm]) => {
+  if (!isCurrent()) {
+    return
+  }
+
   cancelPendingPage()
   pageNumber.value = 0
   pageResult.value = null
@@ -111,6 +126,7 @@ watch([selectedViewKey, searchTerm, searchMode], ([, term], [, previousTerm]) =>
 }, { flush: 'sync' })
 
 onBeforeUnmount(() => {
+  disposed = true
   cancelPendingPage()
   countsRequestId += 1
   listsRequestId += 1
@@ -162,7 +178,7 @@ function cancelPendingPage() {
 }
 
 async function changePage(page) {
-  if (!pageResult.value || pageLoading.value || pageError.value
+  if (!isCurrent() || !pageResult.value || pageLoading.value || pageError.value
       || page < 0 || page >= pageResult.value.totalPages) {
     return
   }
@@ -172,32 +188,27 @@ async function changePage(page) {
 }
 
 async function loadPage() {
+  if (!isCurrent()) {
+    return
+  }
+
   const url = getPageUrl()
   if (!url) {
     return
   }
 
   cancelPendingPage()
-  const request = new AbortController()
-  pageRequest = request
+  const controller = new AbortController()
+  pageRequest = controller
   pageLoading.value = true
   pageError.value = ''
-  let failureMessage = searchTerm.value ? 'Unable to search reminders.' : 'Unable to load reminders.'
+  const failureMessage = searchTerm.value ? 'Unable to search reminders.' : 'Unable to load reminders.'
   let page = pageNumber.value
 
   try {
     while (true) {
-      const response = await fetch(`${url}&page=${page}&size=${pageSize}`, { signal: request.signal })
-      if (!response.ok) {
-        const problem = await response.json().catch(() => null)
-        if (problem?.detail) {
-          failureMessage = problem.detail
-        }
-        throw new Error(`Request failed with status ${response.status}`)
-      }
-
-      const results = await response.json()
-      if (request !== pageRequest) {
+      const results = await request(`${url}&page=${page}&size=${pageSize}`, { signal: controller.signal })
+      if (!isCurrent() || controller !== pageRequest) {
         return
       }
 
@@ -213,13 +224,13 @@ async function loadPage() {
       pageNumber.value = results.page
       break
     }
-  } catch {
-    if (request === pageRequest) {
+  } catch (error) {
+    if (isCurrent() && controller === pageRequest) {
       pageResult.value = null
-      pageError.value = failureMessage
+      pageError.value = apiErrorMessage(error, failureMessage)
     }
   } finally {
-    if (request === pageRequest) {
+    if (isCurrent() && controller === pageRequest) {
       pageRequest = null
       pageLoading.value = false
     }
@@ -293,22 +304,21 @@ function validateListName(name) {
 }
 
 async function loadCounts() {
+  if (!isCurrent()) {
+    return
+  }
+
   const requestId = ++countsRequestId
   countsError.value = ''
   try {
     const params = new URLSearchParams({ today: getTodayDate() })
-    const response = await fetch(`/api/reminders/counts?${params}`)
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
-    }
-
-    const results = await response.json()
-    if (requestId === countsRequestId) {
+    const results = await request(`/api/reminders/counts?${params}`)
+    if (isCurrent() && requestId === countsRequestId) {
       viewCounts.value = results
     }
-  } catch {
-    if (requestId === countsRequestId) {
-      countsError.value = 'Unable to refresh reminder counts.'
+  } catch (error) {
+    if (isCurrent() && requestId === countsRequestId) {
+      countsError.value = apiErrorMessage(error, 'Unable to refresh reminder counts.')
     }
   }
 }
@@ -318,21 +328,20 @@ async function refreshRemindersAfterMutation() {
 }
 
 async function loadLists() {
+  if (!isCurrent()) {
+    return
+  }
+
   const requestId = ++listsRequestId
   listsLoadError.value = ''
   try {
-    const response = await fetch('/api/lists')
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
-    }
-
-    const results = await response.json()
-    if (requestId === listsRequestId) {
+    const results = await request('/api/lists')
+    if (isCurrent() && requestId === listsRequestId) {
       lists.value = results
     }
-  } catch {
-    if (requestId === listsRequestId) {
-      listsLoadError.value = 'Unable to refresh reminder lists.'
+  } catch (error) {
+    if (isCurrent() && requestId === listsRequestId) {
+      listsLoadError.value = apiErrorMessage(error, 'Unable to refresh reminder lists.')
     }
   }
 }
@@ -347,6 +356,10 @@ function selectDefaultList() {
 onMounted(async () => {
   void loadCounts()
   await loadLists()
+  if (!isCurrent()) {
+    return
+  }
+
   if (selectedView.value.type === 'list' && selectedView.value.id === null) {
     selectDefaultList()
   }
@@ -376,7 +389,7 @@ function cancelNewList() {
 }
 
 async function createList() {
-  if (creatingList.value) {
+  if (!isCurrent() || creatingList.value) {
     return
   }
 
@@ -392,29 +405,28 @@ async function createList() {
   creatingList.value = true
 
   try {
-    const response = await fetch('/api/lists', {
+    const createdList = await request('/api/lists', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name })
+      body: { name }
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
-    const createdList = await response.json()
     listsRequestId += 1
     lists.value = [...lists.value, createdList]
     selectedView.value = { type: 'list', id: createdList.id }
     showingNewListForm.value = false
     newListName.value = ''
     await Promise.all([loadLists(), loadCounts()])
-  } catch {
-    listError.value = 'Unable to create reminder list.'
+  } catch (error) {
+    if (isCurrent()) {
+      listError.value = apiErrorMessage(error, 'Unable to create reminder list.')
+    }
   } finally {
-    creatingList.value = false
+    if (isCurrent()) {
+      creatingList.value = false
+    }
   }
 }
 
@@ -433,7 +445,7 @@ function cancelRenamingList() {
 }
 
 async function renameList(list) {
-  if (savingListId.value !== null || deletingListIds.has(list.id)) {
+  if (!isCurrent() || savingListId.value !== null || deletingListIds.has(list.id)) {
     return
   }
 
@@ -449,19 +461,14 @@ async function renameList(list) {
   savingListId.value = list.id
 
   try {
-    const response = await fetch(`/api/lists/${list.id}`, {
+    const updatedList = await request(`/api/lists/${list.id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name })
+      body: { name }
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
-    const updatedList = await response.json()
     listsRequestId += 1
     const listIndex = lists.value.findIndex(({ id }) => id === updatedList.id)
 
@@ -474,15 +481,19 @@ async function renameList(list) {
       renameListName.value = ''
     }
     await loadLists()
-  } catch {
-    listError.value = 'Unable to rename reminder list.'
+  } catch (error) {
+    if (isCurrent()) {
+      listError.value = apiErrorMessage(error, 'Unable to rename reminder list.')
+    }
   } finally {
-    savingListId.value = null
+    if (isCurrent()) {
+      savingListId.value = null
+    }
   }
 }
 
 async function deleteList(listId) {
-  if (deletingListIds.has(listId) || savingListId.value === listId) {
+  if (!isCurrent() || deletingListIds.has(listId) || savingListId.value === listId) {
     return
   }
 
@@ -490,12 +501,11 @@ async function deleteList(listId) {
   deletingListIds.add(listId)
 
   try {
-    const response = await fetch(`/api/lists/${listId}`, {
+    await request(`/api/lists/${listId}`, {
       method: 'DELETE'
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
     listsRequestId += 1
@@ -510,14 +520,22 @@ async function deleteList(listId) {
     }
 
     await Promise.all([loadLists(), loadCounts(), pageRefresh])
-  } catch {
-    listError.value = 'Unable to delete reminder list.'
+  } catch (error) {
+    if (isCurrent()) {
+      listError.value = apiErrorMessage(error, 'Unable to delete reminder list.')
+    }
   } finally {
-    deletingListIds.delete(listId)
+    if (isCurrent()) {
+      deletingListIds.delete(listId)
+    }
   }
 }
 
 async function createReminder() {
+  if (!isCurrent() || submitting.value) {
+    return
+  }
+
   submissionError.value = ''
   const validationError = validateDueSchedule(form.dueDate, form.dueTime) || validateNotes(form.notes)
   const listId = selectedView.value.type === 'list'
@@ -532,23 +550,19 @@ async function createReminder() {
   submitting.value = true
 
   try {
-    const response = await fetch('/api/reminders', {
+    await request('/api/reminders', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
+      body: {
         title: form.title,
         notes: normalizeNotes(form.notes),
         dueDate: form.dueDate || null,
         dueTime: form.dueTime || null,
         priority: form.priority,
         listId
-      })
+      }
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
     form.title = ''
@@ -557,15 +571,19 @@ async function createReminder() {
     form.dueTime = ''
     form.priority = 'NONE'
     await refreshRemindersAfterMutation()
-  } catch {
-    submissionError.value = 'Unable to create reminder.'
+  } catch (error) {
+    if (isCurrent()) {
+      submissionError.value = apiErrorMessage(error, 'Unable to create reminder.')
+    }
   } finally {
-    submitting.value = false
+    if (isCurrent()) {
+      submitting.value = false
+    }
   }
 }
 
 async function updateCompletion(reminder, event) {
-  if (updatingReminderIds.has(reminder.id)) {
+  if (!isCurrent() || updatingReminderIds.has(reminder.id)) {
     return
   }
 
@@ -574,29 +592,29 @@ async function updateCompletion(reminder, event) {
   updatingReminderIds.add(reminder.id)
 
   try {
-    const response = await fetch(`/api/reminders/${reminder.id}/completion`, {
+    await request(`/api/reminders/${reminder.id}/completion`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ completed })
+      body: { completed }
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
     await refreshRemindersAfterMutation()
-  } catch {
-    event.target.checked = reminder.completed
-    completionError.value = 'Unable to update reminder completion.'
+  } catch (error) {
+    if (isCurrent()) {
+      event.target.checked = reminder.completed
+      completionError.value = apiErrorMessage(error, 'Unable to update reminder completion.')
+    }
   } finally {
-    updatingReminderIds.delete(reminder.id)
+    if (isCurrent()) {
+      updatingReminderIds.delete(reminder.id)
+    }
   }
 }
 
 async function deleteReminder(reminder) {
-  if (deletingReminderIds.has(reminder.id)) {
+  if (!isCurrent() || deletingReminderIds.has(reminder.id)) {
     return
   }
 
@@ -604,19 +622,22 @@ async function deleteReminder(reminder) {
   deletingReminderIds.add(reminder.id)
 
   try {
-    const response = await fetch(`/api/reminders/${reminder.id}`, {
+    await request(`/api/reminders/${reminder.id}`, {
       method: 'DELETE'
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
     await refreshRemindersAfterMutation()
-  } catch {
-    deleteError.value = 'Unable to delete reminder.'
+  } catch (error) {
+    if (isCurrent()) {
+      deleteError.value = apiErrorMessage(error, 'Unable to delete reminder.')
+    }
   } finally {
-    deletingReminderIds.delete(reminder.id)
+    if (isCurrent()) {
+      deletingReminderIds.delete(reminder.id)
+    }
   }
 }
 
@@ -636,7 +657,7 @@ function cancelEditing() {
 }
 
 async function saveReminder(reminder) {
-  if (savingReminderIds.has(reminder.id)) {
+  if (!isCurrent() || savingReminderIds.has(reminder.id)) {
     return
   }
 
@@ -651,32 +672,32 @@ async function saveReminder(reminder) {
   savingReminderIds.add(reminder.id)
 
   try {
-    const response = await fetch(`/api/reminders/${reminder.id}`, {
+    await request(`/api/reminders/${reminder.id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
+      body: {
         title: editForm.title,
         notes: normalizeNotes(editForm.notes),
         dueDate: editForm.dueDate || null,
         dueTime: editForm.dueTime || null,
         priority: editForm.priority
-      })
+      }
     })
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`)
+    if (!isCurrent()) {
+      return
     }
 
     if (editingReminderId.value === reminder.id) {
       editingReminderId.value = null
     }
     await refreshRemindersAfterMutation()
-  } catch {
-    editError.value = 'Unable to update reminder.'
+  } catch (error) {
+    if (isCurrent()) {
+      editError.value = apiErrorMessage(error, 'Unable to update reminder.')
+    }
   } finally {
-    savingReminderIds.delete(reminder.id)
+    if (isCurrent()) {
+      savingReminderIds.delete(reminder.id)
+    }
   }
 }
 </script>
@@ -712,6 +733,7 @@ async function saveReminder(reminder) {
     />
 
     <section class="reminder-content">
+      <slot name="account" />
       <h1>{{ displayHeading }}</h1>
 
       <ReminderForm

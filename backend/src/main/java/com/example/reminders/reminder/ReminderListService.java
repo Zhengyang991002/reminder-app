@@ -1,5 +1,7 @@
 package com.example.reminders.reminder;
 
+import com.example.reminders.auth.CurrentUser;
+import com.example.reminders.auth.UserRepository;
 import com.example.reminders.common.BadRequestException;
 import com.example.reminders.common.ResourceNotFoundException;
 import com.example.reminders.reminder.dto.CreateReminderListRequest;
@@ -14,21 +16,25 @@ import java.util.List;
 @Transactional(readOnly = true)
 public class ReminderListService {
 
-    private static final String DEFAULT_REMINDER_LIST_NAME = "Reminders";
-
     private final ReminderListRepository reminderListRepository;
     private final ReminderRepository reminderRepository;
+    private final UserRepository userRepository;
+    private final CurrentUser currentUser;
 
     public ReminderListService(
             ReminderListRepository reminderListRepository,
-            ReminderRepository reminderRepository
+            ReminderRepository reminderRepository,
+            UserRepository userRepository,
+            CurrentUser currentUser
     ) {
         this.reminderListRepository = reminderListRepository;
         this.reminderRepository = reminderRepository;
+        this.userRepository = userRepository;
+        this.currentUser = currentUser;
     }
 
     public List<ReminderListResponse> findAll() {
-        return reminderListRepository.findAll()
+        return reminderListRepository.findAllByUser_IdOrderByIdAsc(currentUser.requireId())
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -36,48 +42,45 @@ public class ReminderListService {
 
     @Transactional
     public ReminderListResponse create(CreateReminderListRequest request) {
-        ReminderList reminderList = new ReminderList(request.name().trim());
+        Long ownerId = currentUser.requireId();
+        ReminderList reminderList = new ReminderList(request.name().trim(), userRepository.getReferenceById(ownerId));
         return toResponse(reminderListRepository.save(reminderList));
     }
 
     @Transactional
     public ReminderListResponse update(Long id, UpdateReminderListRequest request) {
-        ReminderList reminderList = getReminderList(id);
+        ReminderList reminderList = getReminderListForUpdate(id, currentUser.requireId());
         reminderList.rename(request.name().trim());
         return toResponse(reminderList);
     }
 
     @Transactional
     public void delete(Long id) {
-        ReminderList reminderList = getReminderList(id);
-        ReminderList defaultReminderList = getDefaultReminderList();
+        Long ownerId = currentUser.requireId();
+        ReminderList reminderList = getReminderListForUpdate(id, ownerId);
 
-        if (reminderList.getId().equals(defaultReminderList.getId())) {
+        if (reminderList.isDefault()) {
             throw new BadRequestException("The default reminder list cannot be deleted");
         }
 
-        reminderRepository.findAllByList(reminderList)
+        ReminderList defaultReminderList = reminderListRepository.findByUser_IdAndDefaultListTrue(ownerId)
+                .orElseThrow(() -> new ResourceNotFoundException("The default reminder list was not found"));
+        reminderRepository.findAllByListAndList_User_Id(reminderList, ownerId)
                 .forEach(reminder -> reminder.moveTo(defaultReminderList));
         reminderListRepository.delete(reminderList);
     }
 
-    private ReminderList getReminderList(Long id) {
-        return reminderListRepository.findById(id)
+    private ReminderList getReminderListForUpdate(Long id, Long ownerId) {
+        return reminderListRepository.findOwnedForUpdate(id, ownerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reminder list with id " + id + " was not found"));
-    }
-
-    private ReminderList getDefaultReminderList() {
-        return reminderListRepository.findFirstByNameOrderByIdAsc(DEFAULT_REMINDER_LIST_NAME)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Reminder list named " + DEFAULT_REMINDER_LIST_NAME + " was not found"
-                ));
     }
 
     private ReminderListResponse toResponse(ReminderList reminderList) {
         return new ReminderListResponse(
                 reminderList.getId(),
                 reminderList.getName(),
-                reminderList.getCreatedAt()
+                reminderList.getCreatedAt(),
+                reminderList.isDefault()
         );
     }
 }

@@ -6,3 +6,9 @@ spring:
     hibernate:
       ddl-auto: validate
     show-sql: true
+server:
+  servlet:
+    session:
+      cookie:
+        # Local Vite and Spring Boot development use HTTP.
+        secure: false

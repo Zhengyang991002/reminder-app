@@ -1,5 +1,9 @@
 package com.example.reminders.reminder;
 
+import com.example.reminders.auth.AppUser;
+import com.example.reminders.auth.AuthenticatedTestSession;
+import com.example.reminders.auth.UserRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -12,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.time.Instant;
@@ -38,20 +43,36 @@ class ReminderSearchIntegrationTest {
     private MockMvc mockMvc;
 
     @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
     private ReminderRepository reminderRepository;
 
     @Autowired
     private ReminderListRepository reminderListRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    private AuthenticatedTestSession session;
+    private AppUser owner;
+
     private ReminderList defaultList;
     private ReminderList otherList;
 
     @BeforeEach
-    void resetRemindersAndLists() {
-        reminderRepository.deleteAll();
-        reminderListRepository.deleteAll();
-        defaultList = reminderListRepository.save(new ReminderList("Reminders"));
-        otherList = reminderListRepository.save(new ReminderList("Work"));
+    void resetRemindersAndLists() throws Exception {
+        reminderRepository.deleteAllInBatch();
+        reminderListRepository.deleteAllInBatch();
+        userRepository.deleteAllInBatch();
+        session = AuthenticatedTestSession.registerAndLogin(mockMvc, objectMapper, "regression@example.com");
+        owner = userRepository.findById(session.userId()).orElseThrow();
+        defaultList = reminderListRepository.findByUser_IdAndDefaultListTrue(session.userId()).orElseThrow();
+        otherList = reminderListRepository.save(new ReminderList("Work", owner));
+    }
+
+    private ResultActions perform(MockHttpServletRequestBuilder request) throws Exception {
+        return session.perform(mockMvc, request);
     }
 
     @Test
@@ -60,7 +81,7 @@ class ReminderSearchIntegrationTest {
         saveReminder("Review framework", "Read about Spring Boot\nTake notes", null, otherList);
         saveReminder("Clean desk", null, null, defaultList);
 
-        mockMvc.perform(get("/api/reminders").param("q", "rInG").param("scope", "global"))
+        perform(get("/api/reminders").param("q", "rInG").param("scope", "global"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", containsInAnyOrder("Prepare SPRING slides", "Review framework")));
     }
@@ -70,7 +91,7 @@ class ReminderSearchIntegrationTest {
         saveReminder("Review Spring Boot", null, null, otherList);
         saveReminder("Review calendar", null, null, defaultList);
 
-        mockMvc.perform(get("/api/reminders").param("q", "\u2003\t sPrInG \n\u3000"))
+        perform(get("/api/reminders").param("q", "\u2003\t sPrInG \n\u3000"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", contains("Review Spring Boot")));
     }
@@ -81,7 +102,7 @@ class ReminderSearchIntegrationTest {
         saveReminder("Read chapter", "Keep the examples", null, defaultList);
         saveReminder("Buy groceries", null, null, otherList);
 
-        mockMvc.perform(get("/api/reminders").param("q", query).param("scope", "global"))
+        perform(get("/api/reminders").param("q", query).param("scope", "global"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", containsInAnyOrder("Read chapter", "Buy groceries")));
     }
@@ -93,7 +114,7 @@ class ReminderSearchIntegrationTest {
         saveReminder("Full note", "Start " + query + " end", null, defaultList);
         saveReminder("Short note", query.substring(0, 200 - character.length()), null, otherList);
 
-        mockMvc.perform(get("/api/reminders").param("q", "\u2003\t" + query + "\n "))
+        perform(get("/api/reminders").param("q", "\u2003\t" + query + "\n "))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", contains("Full note")));
     }
@@ -119,7 +140,7 @@ class ReminderSearchIntegrationTest {
         saveReminder("Matching note", "batch" + query + "completed", null, otherList);
         saveReminder("batchxcompleted", "batch completed", null, defaultList);
 
-        mockMvc.perform(get("/api/reminders").param("q", query))
+        perform(get("/api/reminders").param("q", query))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", containsInAnyOrder(matchingTitle, "Matching note")));
     }
@@ -128,7 +149,7 @@ class ReminderSearchIntegrationTest {
     void searchesAllRemindersInAllView() throws Exception {
         saveViewFixtures();
 
-        mockMvc.perform(get("/api/reminders").param("q", "spring").param("scope", "view").param("view", "all"))
+        perform(get("/api/reminders").param("q", "spring").param("scope", "view").param("view", "all"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", containsInAnyOrder(
                         "Spring today", "Today in Work", "Spring later", "Unscheduled", "Spring in Work")));
@@ -138,7 +159,7 @@ class ReminderSearchIntegrationTest {
     void searchesOnlyTheBrowserDateInTodayView() throws Exception {
         saveViewFixtures();
 
-        mockMvc.perform(get("/api/reminders")
+        perform(get("/api/reminders")
                         .param("q", "spring").param("scope", "view").param("view", "today")
                         .param("today", BROWSER_TODAY.toString()))
                 .andExpect(status().isOk())
@@ -149,7 +170,7 @@ class ReminderSearchIntegrationTest {
     void searchesOnlyDatedRemindersInScheduledView() throws Exception {
         saveViewFixtures();
 
-        mockMvc.perform(get("/api/reminders")
+        perform(get("/api/reminders")
                         .param("q", "spring").param("scope", "view").param("view", "scheduled"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", containsInAnyOrder("Spring today", "Today in Work", "Spring later")));
@@ -159,7 +180,7 @@ class ReminderSearchIntegrationTest {
     void searchesOnlyTheSpecifiedPersistedListInListView() throws Exception {
         saveViewFixtures();
 
-        mockMvc.perform(get("/api/reminders")
+        perform(get("/api/reminders")
                         .param("q", "spring").param("scope", "view").param("view", "list")
                         .param("listId", defaultList.getId().toString()))
                 .andExpect(status().isOk())
@@ -170,7 +191,7 @@ class ReminderSearchIntegrationTest {
     void appliesViewFilterWhenQueryIsBlank() throws Exception {
         saveViewFixtures();
 
-        mockMvc.perform(get("/api/reminders")
+        perform(get("/api/reminders")
                         .param("q", "  ").param("scope", "view").param("view", "list")
                         .param("listId", defaultList.getId().toString()))
                 .andExpect(status().isOk())
@@ -226,7 +247,7 @@ class ReminderSearchIntegrationTest {
 
     @Test
     void returnsNotFoundForAnUnknownList() throws Exception {
-        mockMvc.perform(get("/api/reminders")
+        perform(get("/api/reminders")
                         .param("q", "spring").param("scope", "view").param("view", "list")
                         .param("listId", Long.toString(Long.MAX_VALUE)))
                 .andExpect(status().isNotFound())
@@ -252,7 +273,7 @@ class ReminderSearchIntegrationTest {
         saveOrderedMatch("Newer high priority", false, BROWSER_TODAY, morning, ReminderPriority.HIGH, newer);
         saveReminder("Other reminder", null, earlier, defaultList);
 
-        mockMvc.perform(get("/api/reminders").param("q", "search fixture"))
+        perform(get("/api/reminders").param("q", "search fixture"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].title", contains(
                         "Newer high priority", "Older high priority", "Low priority", "Later time",
@@ -266,7 +287,7 @@ class ReminderSearchIntegrationTest {
                 otherList, "Read about Spring Boot"));
         saveReminder("Buy groceries", null, null, defaultList);
 
-        mockMvc.perform(get("/api/reminders"))
+        perform(get("/api/reminders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(2)))
                 .andExpect(jsonPath("$[0].id").value(scheduled.getId()))
@@ -284,7 +305,7 @@ class ReminderSearchIntegrationTest {
     }
 
     private void assertBadRequest(MockHttpServletRequestBuilder request) throws Exception {
-        mockMvc.perform(request)
+        perform(request)
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.status").value(400))

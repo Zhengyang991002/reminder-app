@@ -5,3 +5,11 @@ spring:
     default: dev
   jpa:
     open-in-view: false
+server:
+  servlet:
+    session:
+      tracking-modes: cookie
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: true

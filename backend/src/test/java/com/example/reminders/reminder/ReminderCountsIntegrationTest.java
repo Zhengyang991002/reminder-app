@@ -1,5 +1,8 @@
 package com.example.reminders.reminder;
 
+import com.example.reminders.auth.AppUser;
+import com.example.reminders.auth.AuthenticatedTestSession;
+import com.example.reminders.auth.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hibernate.resource.jdbc.spi.StatementInspector;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +21,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -55,17 +60,32 @@ class ReminderCountsIntegrationTest {
     private ReminderListRepository reminderListRepository;
 
     @Autowired
+    private UserRepository userRepository;
+
+    private AuthenticatedTestSession session;
+    private AppUser owner;
+
+    @Autowired
     private SqlCapture sqlCapture;
 
+    private ReminderList defaultList;
+
     @BeforeEach
-    void resetDatabase() {
-        reminderRepository.deleteAll();
-        reminderListRepository.deleteAll();
+    void resetDatabase() throws Exception {
+        reminderRepository.deleteAllInBatch();
+        reminderListRepository.deleteAllInBatch();
+        userRepository.deleteAllInBatch();
+        session = AuthenticatedTestSession.registerAndLogin(mockMvc, objectMapper, "regression@example.com");
+        owner = userRepository.findById(session.userId()).orElseThrow();
+        defaultList = reminderListRepository.findByUser_IdAndDefaultListTrue(session.userId()).orElseThrow();
+    }
+
+    private ResultActions perform(MockHttpServletRequestBuilder request) throws Exception {
+        return session.perform(mockMvc, request);
     }
 
     @Test
     void countsAllViewsInOneGroupedQueryIncludingCompletedReminders() throws Exception {
-        ReminderList defaultList = saveList("Reminders");
         ReminderList work = saveList("Work");
         ReminderList empty = saveList("Empty");
         saveReminder(defaultList, BROWSER_TODAY, true);
@@ -92,13 +112,13 @@ class ReminderCountsIntegrationTest {
     }
 
     @Test
-    void returnsZeroCountsAndAnEmptyListMapForAnEmptyDatabase() throws Exception {
+    void returnsZeroCountsAndAnEmptyListMapWhenTheOwnerHasNoLists() throws Exception {
+        reminderListRepository.delete(defaultList);
         assertCounts(BROWSER_TODAY, 0, 0, 0, Map.of());
     }
 
     @Test
     void returnsExplicitZeroForEachListWhenThereAreNoReminders() throws Exception {
-        ReminderList defaultList = saveList("Reminders");
         ReminderList work = saveList("Work");
 
         assertCounts(BROWSER_TODAY, 0, 0, 0, Map.of(defaultList.getId(), 0L, work.getId(), 0L));
@@ -113,7 +133,7 @@ class ReminderCountsIntegrationTest {
             request.param("today", today);
         }
 
-        mockMvc.perform(request)
+        perform(request)
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.status").value(400))
@@ -122,7 +142,6 @@ class ReminderCountsIntegrationTest {
 
     @Test
     void reflectsListDeletionAndReassignmentWithoutChangingSmartCounts() throws Exception {
-        ReminderList defaultList = saveList("Reminders");
         ReminderList work = saveList("Work");
         saveReminder(defaultList, null, false);
         saveReminder(work, BROWSER_TODAY, true);
@@ -130,7 +149,7 @@ class ReminderCountsIntegrationTest {
 
         assertCounts(BROWSER_TODAY, 3, 1, 2, Map.of(defaultList.getId(), 1L, work.getId(), 2L));
 
-        mockMvc.perform(delete("/api/lists/{id}", work.getId()))
+        perform(delete("/api/lists/{id}", work.getId()))
                 .andExpect(status().isNoContent());
 
         assertCounts(BROWSER_TODAY, 3, 1, 2, Map.of(defaultList.getId(), 3L));
@@ -139,7 +158,6 @@ class ReminderCountsIntegrationTest {
     @Test
     void reflectsDueDateChangesInTodayAndScheduledCounts() throws Exception {
         LocalDate browserToday = LocalDate.now().plusDays(1);
-        ReminderList defaultList = saveList("Reminders");
         Reminder reminder = saveReminder(defaultList, null, false);
         Map<Long, Long> listCounts = Map.of(defaultList.getId(), 1L);
 
@@ -163,14 +181,14 @@ class ReminderCountsIntegrationTest {
                 "scheduled", scheduled,
                 "lists", lists
         ));
-        mockMvc.perform(get(COUNTS_URL).param("today", date.toString()))
+        perform(get(COUNTS_URL).param("today", date.toString()))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(content().json(expected, JsonCompareMode.STRICT));
     }
 
     private ReminderList saveList(String name) {
-        return reminderListRepository.save(new ReminderList(name));
+        return reminderListRepository.save(new ReminderList(name, owner));
     }
 
     private Reminder saveReminder(ReminderList list, LocalDate dueDate, boolean completed) {
@@ -180,7 +198,7 @@ class ReminderCountsIntegrationTest {
     }
 
     private void updateDueDate(Long reminderId, LocalDate dueDate) throws Exception {
-        mockMvc.perform(put("/api/reminders/{id}", reminderId)
+        perform(put("/api/reminders/{id}", reminderId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"title":"Updated reminder","dueDate":%s}

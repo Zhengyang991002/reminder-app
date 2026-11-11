@@ -484,6 +484,131 @@ h1 {
   color: #b42318;
 }
 
+.auth-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+.auth-card {
+  width: min(100%, 27rem);
+  padding: clamp(1rem, 5vw, 2rem);
+  background: #fff;
+  border: 1px solid #d2d2d7;
+  border-radius: 0.75rem;
+}
+
+.auth-card h1 {
+  margin: 0 0 1.25rem;
+  font-size: 1.65rem;
+}
+
+.auth-form {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.auth-form label {
+  margin-top: 0.45rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.auth-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  border: 1px solid #c7c7cc;
+  border-radius: 0.45rem;
+}
+
+.auth-form input[aria-invalid="true"] {
+  border-color: #b42318;
+}
+
+.auth-help,
+.auth-mode {
+  color: #515157;
+  font-size: 0.875rem;
+}
+
+.auth-notice {
+  padding: 0.6rem 0.75rem;
+  background: #eef6ff;
+  border-radius: 0.4rem;
+}
+
+.auth-form .error {
+  margin: 0.4rem 0 0;
+}
+
+.auth-primary {
+  min-height: 2.75rem;
+  margin-top: 0.65rem;
+  padding: 0.65rem 0.9rem;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  background: #005ecb;
+  border: 0;
+  border-radius: 0.45rem;
+  cursor: pointer;
+}
+
+.auth-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.75rem 0 0;
+}
+
+.auth-mode-button {
+  min-height: 2.75rem;
+  padding: 0.25rem 0.35rem;
+  color: #005ecb;
+  font: inherit;
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.auth-primary:disabled,
+.auth-mode-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.auth-card :is(input, button):focus-visible,
+.account-bar button:focus-visible {
+  outline: 2px solid #005ecb;
+  outline-offset: 2px;
+}
+
+.account-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.account-email {
+  min-width: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.account-error {
+  margin: 0 0 0.75rem;
+}
+
 @media (max-width: 42rem) {
   .app-shell {
     grid-template-columns: 1fr;

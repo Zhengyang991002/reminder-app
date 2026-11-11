@@ -1,5 +1,6 @@
 package com.example.reminders.reminder;
 
+import com.example.reminders.auth.CurrentUser;
 import com.example.reminders.common.BadRequestException;
 import com.example.reminders.common.ResourceNotFoundException;
 import com.example.reminders.reminder.dto.CreateReminderRequest;
@@ -24,7 +25,6 @@ import java.util.Map;
 @Transactional(readOnly = true)
 public class ReminderService {
 
-    private static final String DEFAULT_REMINDER_LIST_NAME = "Reminders";
     private static final int MAX_SEARCH_QUERY_LENGTH = 200;
     // Legacy array endpoint ordering; pageable queries reproduce it in ReminderRepository.PAGE_ORDER.
     private static final Comparator<Reminder> REMINDER_ORDER = Comparator
@@ -36,22 +36,26 @@ public class ReminderService {
 
     private final ReminderRepository reminderRepository;
     private final ReminderListRepository reminderListRepository;
+    private final CurrentUser currentUser;
 
     public ReminderService(
             ReminderRepository reminderRepository,
-            ReminderListRepository reminderListRepository
+            ReminderListRepository reminderListRepository,
+            CurrentUser currentUser
     ) {
         this.reminderRepository = reminderRepository;
         this.reminderListRepository = reminderListRepository;
+        this.currentUser = currentUser;
     }
 
     public List<ReminderResponse> findAll(String query, String scope, String view, String listId, String today) {
-        SearchCriteria criteria = searchCriteria(query, scope, view, listId, today);
+        Long ownerId = currentUser.requireId();
+        SearchCriteria criteria = searchCriteria(query, scope, view, listId, today, ownerId);
         List<Reminder> matches = switch (criteria.view()) {
-            case "today" -> reminderRepository.searchByDate(criteria.pattern(), criteria.date());
-            case "scheduled" -> reminderRepository.searchScheduled(criteria.pattern());
-            case "list" -> reminderRepository.searchByList(criteria.pattern(), criteria.list());
-            default -> reminderRepository.searchAll(criteria.pattern());
+            case "today" -> reminderRepository.searchByDate(ownerId, criteria.pattern(), criteria.date());
+            case "scheduled" -> reminderRepository.searchScheduled(ownerId, criteria.pattern());
+            case "list" -> reminderRepository.searchByList(ownerId, criteria.pattern(), criteria.list());
+            default -> reminderRepository.searchAll(ownerId, criteria.pattern());
         };
 
         return matches.stream()
@@ -63,13 +67,14 @@ public class ReminderService {
     public ReminderPageResponse findPage(
             String query, String scope, String view, String listId, String today, String page, String size
     ) {
+        Long ownerId = currentUser.requireId();
         PageRequest pageable = pageRequest(page, size);
-        SearchCriteria criteria = searchCriteria(query, scope, view, listId, today);
+        SearchCriteria criteria = searchCriteria(query, scope, view, listId, today, ownerId);
         Page<Reminder> matches = switch (criteria.view()) {
-            case "today" -> reminderRepository.searchByDate(criteria.pattern(), criteria.date(), pageable);
-            case "scheduled" -> reminderRepository.searchScheduled(criteria.pattern(), pageable);
-            case "list" -> reminderRepository.searchByList(criteria.pattern(), criteria.list(), pageable);
-            default -> reminderRepository.searchAll(criteria.pattern(), pageable);
+            case "today" -> reminderRepository.searchByDate(ownerId, criteria.pattern(), criteria.date(), pageable);
+            case "scheduled" -> reminderRepository.searchScheduled(ownerId, criteria.pattern(), pageable);
+            case "list" -> reminderRepository.searchByList(ownerId, criteria.pattern(), criteria.list(), pageable);
+            default -> reminderRepository.searchAll(ownerId, criteria.pattern(), pageable);
         };
 
         // The database has already filtered, ordered and limited this page.
@@ -87,12 +92,13 @@ public class ReminderService {
     }
 
     public ReminderCountsResponse findCounts(String today) {
+        Long ownerId = currentUser.requireId();
         LocalDate date = parseToday(today, "today is required");
         Map<Long, Long> lists = new LinkedHashMap<>();
         long allCount = 0;
         long todayCount = 0;
         long scheduledCount = 0;
-        for (ReminderRepository.ViewCountRow row : reminderRepository.countByView(date)) {
+        for (ReminderRepository.ViewCountRow row : reminderRepository.countByView(ownerId, date)) {
             lists.put(row.getListId(), row.getReminderCount());
             allCount += row.getReminderCount();
             todayCount += row.getTodayCount();
@@ -128,7 +134,9 @@ public class ReminderService {
         }
     }
 
-    private SearchCriteria searchCriteria(String query, String scope, String view, String listId, String today) {
+    private SearchCriteria searchCriteria(
+            String query, String scope, String view, String listId, String today, Long ownerId
+    ) {
         String pattern = searchPattern(query);
         if (scope == null || "global".equals(scope)) {
             if (view != null || listId != null || today != null) {
@@ -154,7 +162,7 @@ public class ReminderService {
             case "today" -> new SearchCriteria(
                     pattern, view, parseToday(today, "today is required when view=today"), null
             );
-            case "list" -> new SearchCriteria(pattern, view, null, getReminderList(parseListId(listId)));
+            case "list" -> new SearchCriteria(pattern, view, null, getReminderList(parseListId(listId), ownerId));
             default -> throw new BadRequestException("view must be all, today, scheduled or list");
         };
     }
@@ -206,9 +214,11 @@ public class ReminderService {
 
     @Transactional
     public ReminderResponse create(CreateReminderRequest request) {
+        Long ownerId = currentUser.requireId();
         ReminderList reminderList = request.listId() == null
-                ? getDefaultReminderList()
-                : getReminderList(request.listId());
+                ? getDefaultReminderList(ownerId)
+                : reminderListRepository.findOwnedForUpdate(request.listId(), ownerId)
+                        .orElseThrow(() -> reminderListNotFound(request.listId()));
         Reminder reminder = new Reminder(
                 request.title().trim(),
                 request.dueDate(),
@@ -220,16 +230,18 @@ public class ReminderService {
         return toResponse(reminderRepository.save(reminder));
     }
 
-    private ReminderList getDefaultReminderList() {
-        return reminderListRepository.findFirstByNameOrderByIdAsc(DEFAULT_REMINDER_LIST_NAME)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Reminder list named " + DEFAULT_REMINDER_LIST_NAME + " was not found"
-                ));
+    private ReminderList getDefaultReminderList(Long ownerId) {
+        return reminderListRepository.findByUser_IdAndDefaultListTrue(ownerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Default reminder list was not found"));
     }
 
-    private ReminderList getReminderList(Long id) {
-        return reminderListRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Reminder list with id " + id + " was not found"));
+    private ReminderList getReminderList(Long id, Long ownerId) {
+        return reminderListRepository.findByIdAndUser_Id(id, ownerId)
+                .orElseThrow(() -> reminderListNotFound(id));
+    }
+
+    private ResourceNotFoundException reminderListNotFound(Long id) {
+        return new ResourceNotFoundException("Reminder list with id " + id + " was not found");
     }
 
     @Transactional
@@ -258,7 +270,7 @@ public class ReminderService {
     }
 
     private Reminder getReminder(Long id) {
-        return reminderRepository.findById(id)
+        return reminderRepository.findByIdAndList_User_Id(id, currentUser.requireId())
                 .orElseThrow(() -> new ResourceNotFoundException("Reminder with id " + id + " was not found"));
     }
 

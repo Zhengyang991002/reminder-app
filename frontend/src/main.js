@@ -1,5 +1,5 @@
 import { createApp } from 'vue'
 import './style.css'
-import App from './App.vue'
+import AuthRoot from './AuthRoot.vue'
 
-createApp(App).mount('#app')
+createApp(AuthRoot).mount('#app')
